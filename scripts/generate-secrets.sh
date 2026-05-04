@@ -34,8 +34,8 @@ mint_jwt() {
 }
 
 current_value() {
-  # current_value <KEY>  -> prints existing value (may be empty)
-  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit }' "$ENV_FILE"
+  # current_value <KEY>  -> prints existing value (may be empty), stripping inline comments and whitespace
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
 }
 
 set_value() {

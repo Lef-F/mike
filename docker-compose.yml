@@ -27,6 +27,7 @@ services:
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: http://${MIKE_HOST}:${MIKE_PORT}/auth/v1
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=auth
       GOTRUE_SITE_URL: http://${MIKE_HOST}:${MIKE_PORT}
@@ -95,16 +96,14 @@ services:
     restart: "no"
 
   init-garage:
-    image: dxflrs/garage:v2.3.0
+    image: alpine:3.20
     depends_on:
       garage:
         condition: service_healthy
     environment:
-      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
       GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
       GARAGE_RPC_HOST: garage:3901
     volumes:
-      - ./docker/garage.toml:/etc/garage.toml:ro
       - ./docker/init-garage.sh:/init-garage.sh:ro
       - garage_creds:/secrets
     entrypoint: ["/bin/sh", "/init-garage.sh"]
