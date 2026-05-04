@@ -3,6 +3,9 @@
 # into ./.env. Idempotent: existing non-empty values are kept unless --force.
 set -euo pipefail
 
+command -v openssl >/dev/null 2>&1 || { echo "error: openssl is required but not found on PATH" >&2; exit 1; }
+umask 077
+
 ENV_FILE="${ENV_FILE:-.env}"
 FORCE=0
 [ "${1:-}" = "--force" ] && FORCE=1
@@ -32,7 +35,7 @@ mint_jwt() {
 
 current_value() {
   # current_value <KEY>  -> prints existing value (may be empty)
-  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$ENV_FILE"
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); print; exit }' "$ENV_FILE"
 }
 
 set_value() {
@@ -45,8 +48,10 @@ set_value() {
       $1 == k { print k "=" v; next }
       { print }
     ' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
   else
     printf '%s=%s\n' "$key" "$val" >> "$ENV_FILE"
+    chmod 600 "$ENV_FILE"
   fi
 }
 
