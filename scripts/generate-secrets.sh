@@ -25,7 +25,7 @@ mint_jwt() {
   now=$(date +%s)
   exp=$((now + 60 * 60 * 24 * 365 * 10))   # ~10 years
   header='{"alg":"HS256","typ":"JWT"}'
-  payload="{\"role\":\"$role\",\"iss\":\"mike-self-hosted\",\"iat\":$now,\"exp\":$exp}"
+  payload="{\"role\":\"$role\",\"aud\":\"authenticated\",\"iss\":\"mike-self-hosted\",\"iat\":$now,\"exp\":$exp}"
   b64h=$(printf '%s' "$header"  | b64url)
   b64p=$(printf '%s' "$payload" | b64url)
   sig=$(printf '%s.%s' "$b64h" "$b64p" \
