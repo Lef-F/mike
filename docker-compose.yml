@@ -125,7 +125,7 @@ services:
     environment:
       PORT: 3001
       FRONTEND_URL: http://${MIKE_HOST}:${MIKE_PORT}
-      SUPABASE_URL: http://gotrue:9999
+      SUPABASE_URL: http://caddy:${MIKE_PORT}
       SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
