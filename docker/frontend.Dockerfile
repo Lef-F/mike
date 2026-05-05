@@ -15,13 +15,14 @@ RUN npm ci --legacy-peer-deps
 COPY frontend/ ./
 RUN npm run build
 
+# Runtime stage uses Next.js's standalone output (next.config.ts:
+# output: "standalone"), which bundles only the modules the server
+# actually requires. Avoids copying the build stage's full node_modules.
 FROM node:22-bookworm-slim
 WORKDIR /app
-COPY --from=build /app/.next        ./.next
-COPY --from=build /app/public       ./public
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/next.config.ts ./next.config.ts
-EXPOSE 3000
 ENV NODE_ENV=production
-CMD ["npm","run","start"]
+COPY --from=build /app/public               ./public
+COPY --from=build /app/.next/standalone     ./
+COPY --from=build /app/.next/static         ./.next/static
+EXPOSE 3000
+CMD ["node", "server.js"]
