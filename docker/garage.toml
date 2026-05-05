@@ -10,8 +10,14 @@ rpc_public_addr = "garage:3901"
 
 [s3_api]
 api_bind_addr = "[::]:3900"
-s3_region     = "garage"
-root_domain   = ".s3.garage.localhost"
+# Region must match the value the AWS SDK signs requests with.
+# Mike's backend hardcodes `region: "auto"` in src/lib/storage.ts.
+s3_region     = "auto"
+# Suffix the AWS SDK appends to bucket names when constructing
+# virtual-hosted-style URLs ("<bucket>.<endpoint-host>"). Must match
+# the docker-compose network alias (e.g. "mike.garage" for bucket
+# "mike" routed via the "garage" service).
+root_domain   = ".garage"
 
 [admin]
 api_bind_addr = "[::]:3903"

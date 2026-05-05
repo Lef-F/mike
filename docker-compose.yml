@@ -67,6 +67,13 @@ services:
     environment:
       GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
       GARAGE_ADMIN_TOKEN: ${GARAGE_ADMIN_TOKEN}
+    networks:
+      default:
+        # Virtual-hosted-style alias so the AWS S3 SDK's default URL
+        # construction "<bucket>.<endpoint>" resolves. Tied to
+        # R2_BUCKET_NAME — change this if you rename the bucket.
+        aliases:
+          - mike.garage
     volumes:
       - ./docker/garage.toml:/etc/garage.toml:ro
       - garage_meta:/var/lib/garage/meta
