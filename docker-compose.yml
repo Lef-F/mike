@@ -164,7 +164,9 @@ services:
       - mike-backend
       - mike-frontend
     environment:
-      MIKE_HOST: ${MIKE_HOST}
+      # Caddy listens on :{$MIKE_PORT} (any host) so MIKE_HOST is not
+      # consumed here — it only flows into the frontend's baked URLs
+      # and GoTrue's allow-list.
       MIKE_PORT: ${MIKE_PORT}
     ports:
       - "${MIKE_PORT}:${MIKE_PORT}"
