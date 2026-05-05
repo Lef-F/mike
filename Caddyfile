@@ -1,0 +1,31 @@
+{
+  auto_https off
+}
+
+:{$MIKE_PORT} {
+  encode gzip
+
+  handle_path /auth/v1/* {
+    reverse_proxy gotrue:9999 {
+      header_up Host {upstream_hostport}
+    }
+  }
+
+  handle_path /rest/v1/* {
+    reverse_proxy postgrest:3000 {
+      header_up Host {upstream_hostport}
+    }
+  }
+
+  handle_path /backend/* {
+    reverse_proxy mike-backend:3001 {
+      header_up Host {upstream_hostport}
+    }
+  }
+
+  handle {
+    reverse_proxy mike-frontend:3000 {
+      header_up Host {upstream_hostport}
+    }
+  }
+}
