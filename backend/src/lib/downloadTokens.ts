@@ -10,16 +10,14 @@ import crypto from "crypto";
  */
 
 function getSecret(): string {
-    const secret =
-        process.env.DOWNLOAD_SIGNING_SECRET ??
-        process.env.SUPABASE_SECRET_KEY;
-    if (!secret) {
+    const secret = process.env.DOWNLOAD_SIGNING_SECRET;
+    if (!secret?.trim()) {
         throw new Error(
-            "DOWNLOAD_SIGNING_SECRET (or SUPABASE_SECRET_KEY as a fallback) must be set. " +
+            "DOWNLOAD_SIGNING_SECRET is required. " +
                 "Generate a strong random value (e.g. `openssl rand -hex 32`) and set it in the environment.",
         );
     }
-    return secret;
+    return secret.trim();
 }
 
 function b64urlEncode(buf: Buffer): string {
