@@ -15,6 +15,7 @@ import type {
     OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import { getSigningSecret } from "../downloadTokens";
 import type { createServerSupabase } from "../supabase";
 
 const STATE_TTL_SECONDS = 5 * 60; // 5 minutes
@@ -39,14 +40,6 @@ export function oauthCallbackUrl(): string {
 // tokens and would already have to be rotated on compromise.
 // ---------------------------------------------------------------------------
 
-function getSecret(): string {
-    return (
-        process.env.DOWNLOAD_SIGNING_SECRET ??
-        process.env.SUPABASE_SECRET_KEY ??
-        "dev-secret"
-    );
-}
-
 function b64url(buf: Buffer): string {
     return buf
         .toString("base64")
@@ -70,7 +63,7 @@ export function signOAuthState(payload: {
         exp: Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
     };
     const enc = b64url(Buffer.from(JSON.stringify(body), "utf8"));
-    const sig = crypto.createHmac("sha256", getSecret()).update(enc).digest();
+    const sig = crypto.createHmac("sha256", getSigningSecret()).update(enc).digest();
     return `${enc}.${b64url(sig)}`;
 }
 
@@ -81,7 +74,7 @@ export function verifyOAuthState(
     if (parts.length !== 2) return null;
     const [enc, sigEnc] = parts;
     const expected = crypto
-        .createHmac("sha256", getSecret())
+        .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
     const expectedEnc = b64url(expected);

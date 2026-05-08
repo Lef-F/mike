@@ -9,7 +9,13 @@ import crypto from "crypto";
  * expiry or R2 CORS headaches.
  */
 
-function getSecret(): string {
+/**
+ * Resolves the shared HMAC signing secret. Used here for download tokens
+ * and re-exported for other call sites that share the same threat model
+ * (e.g. MCP OAuth state tokens in lib/mcp/oauth.ts) so a single env var
+ * gates every signed token in the app.
+ */
+export function getSigningSecret(): string {
     const secret = process.env.DOWNLOAD_SIGNING_SECRET;
     if (!secret?.trim()) {
         throw new Error(
@@ -43,7 +49,7 @@ export function signDownload(path: string, filename: string): string {
     const payload = JSON.stringify({ p: path, f: filename });
     const enc = b64urlEncode(Buffer.from(payload, "utf8"));
     const sig = crypto
-        .createHmac("sha256", getSecret())
+        .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
     return `${enc}.${b64urlEncode(sig)}`;
@@ -56,7 +62,7 @@ export function verifyDownload(
     if (parts.length !== 2) return null;
     const [enc, sigEnc] = parts;
     const expected = crypto
-        .createHmac("sha256", getSecret())
+        .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
     if (!timingSafeEqStr(sigEnc, b64urlEncode(expected))) return null;
