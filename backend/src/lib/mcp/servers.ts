@@ -7,11 +7,51 @@
 // the dispatcher in chatTools can route calls back to the right server.
 
 import { createHash } from "crypto";
+import {
+    decryptJsonBlob,
+    encryptJsonBlob,
+    needsJsonBlobUpgrade,
+} from "../apiKeys";
 import type { OpenAIToolSchema } from "../llm/types";
 import type { createServerSupabase } from "../supabase";
 import { McpHttpClient } from "./client";
 import { DbOAuthProvider, ReauthRequiredError } from "./oauth";
 import type { LoadedMcpServer, McpServerRow } from "./types";
+
+/**
+ * Decodes the credential-bearing jsonb columns on a freshly-fetched row,
+ * mutating the row in place to expose plaintext to the rest of the loader.
+ * Returns a partial UPDATE patch for any column that was stored as legacy
+ * plaintext and should be re-written encrypted; the caller fires that off
+ * best-effort so the hot path isn't blocked on the upgrade write.
+ *
+ * `oauth_code_verifier` is a per-text-column secret read on demand by
+ * DbOAuthProvider.codeVerifier(); we don't touch it here.
+ */
+export function decryptMcpRowCredentials(
+    row: McpServerRow,
+): Partial<Record<"headers" | "oauth_tokens", string>> {
+    const upgrades: Partial<Record<"headers" | "oauth_tokens", string>> = {};
+
+    const rawHeaders = row.headers as unknown;
+    const decryptedHeaders =
+        decryptJsonBlob<Record<string, string>>(rawHeaders) ?? {};
+    row.headers = decryptedHeaders;
+    if (needsJsonBlobUpgrade(rawHeaders)) {
+        const enc = encryptJsonBlob(decryptedHeaders);
+        if (enc) upgrades.headers = enc;
+    }
+
+    const rawTokens = row.oauth_tokens as unknown;
+    const decryptedTokens = decryptJsonBlob<Record<string, unknown>>(rawTokens);
+    row.oauth_tokens = decryptedTokens;
+    if (needsJsonBlobUpgrade(rawTokens) && decryptedTokens) {
+        const enc = encryptJsonBlob(decryptedTokens);
+        if (enc) upgrades.oauth_tokens = enc;
+    }
+
+    return upgrades;
+}
 
 const TOOL_NAME_MAX = 64;
 const TOOL_PREFIX = "mcp__";
@@ -28,6 +68,28 @@ export async function loadEnabledMcpServersForUser(
     if (error || !data || data.length === 0) return [];
 
     const rows = data as McpServerRow[];
+
+    // Decrypt credential columns in place + opportunistically rewrite any
+    // legacy plaintext rows in the background. We don't await the upgrade
+    // so a failing-forever encryption write can't block tool loading on
+    // every chat turn — but we do log it so callers can detect it.
+    for (const row of rows) {
+        const upgrades = decryptMcpRowCredentials(row);
+        if (Object.keys(upgrades).length > 0) {
+            void db
+                .from("user_mcp_servers")
+                .update(upgrades)
+                .eq("id", row.id)
+                .then(({ error: upgErr }) => {
+                    if (upgErr) {
+                        console.warn(
+                            `[mcp] failed to encrypt-at-rest upgrade row ${row.id}: ${upgErr.message}`,
+                        );
+                    }
+                });
+        }
+    }
+
     const results = await Promise.allSettled(
         rows.map((row) => loadOne(row, userId, db)),
     );

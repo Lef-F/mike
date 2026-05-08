@@ -15,6 +15,12 @@ import type {
     OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
+import {
+    decryptApiKey,
+    decryptJsonBlob,
+    encryptApiKey,
+    encryptJsonBlob,
+} from "../apiKeys";
 import { getSigningSecret } from "../downloadTokens";
 import type { createServerSupabase } from "../supabase";
 
@@ -170,7 +176,10 @@ export class DbOAuthProvider implements OAuthClientProvider {
             .select("oauth_tokens")
             .eq("id", this.serverId)
             .single();
-        const t = (data?.oauth_tokens ?? null) as OAuthTokens | null;
+        // oauth_tokens may be either an `enc:v1:` ciphertext string or, for
+        // rows written before encryption-at-rest landed, the raw token jsonb.
+        // decryptJsonBlob returns plaintext in both cases.
+        const t = decryptJsonBlob<OAuthTokens>(data?.oauth_tokens);
         this.tokensCache = t;
         return t ?? undefined;
     }
@@ -183,7 +192,7 @@ export class DbOAuthProvider implements OAuthClientProvider {
         await this.db
             .from("user_mcp_servers")
             .update({
-                oauth_tokens: tokens,
+                oauth_tokens: encryptJsonBlob(tokens),
                 oauth_code_verifier: null,
                 last_error: null,
             })
@@ -207,7 +216,7 @@ export class DbOAuthProvider implements OAuthClientProvider {
         this.codeVerifierCache = codeVerifier;
         await this.db
             .from("user_mcp_servers")
-            .update({ oauth_code_verifier: codeVerifier })
+            .update({ oauth_code_verifier: encryptApiKey(codeVerifier) })
             .eq("id", this.serverId);
     }
 
@@ -221,8 +230,14 @@ export class DbOAuthProvider implements OAuthClientProvider {
         if (!data?.oauth_code_verifier) {
             throw new Error("Missing PKCE verifier — start the flow again");
         }
-        this.codeVerifierCache = data.oauth_code_verifier;
-        return data.oauth_code_verifier;
+        // decryptApiKey passes legacy plaintext through unchanged, so a row
+        // written before encryption-at-rest landed still works mid-flow.
+        const plaintext = decryptApiKey(data.oauth_code_verifier);
+        if (!plaintext) {
+            throw new Error("Missing PKCE verifier — start the flow again");
+        }
+        this.codeVerifierCache = plaintext;
+        return plaintext;
     }
 
     async invalidateCredentials(

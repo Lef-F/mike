@@ -10,6 +10,7 @@ import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
 import { McpHttpClient } from "../lib/mcp/client";
 import { DbOAuthProvider } from "../lib/mcp/oauth";
+import { decryptJsonBlob, encryptJsonBlob } from "../lib/apiKeys";
 
 export const mcpServersRouter = Router();
 
@@ -147,17 +148,23 @@ function publicShape<T extends Record<string, unknown>>(row: T) {
         oauth_code_verifier: _cv,
         ...rest
     } = row as T & {
-        headers?: Record<string, string>;
+        headers?: unknown;
         oauth_metadata?: unknown;
         oauth_tokens?: unknown;
         oauth_code_verifier?: unknown;
     };
+    // Headers may be either an `enc:v1:` ciphertext string or, for legacy
+    // rows, the raw plaintext jsonb object — decryptJsonBlob normalizes both
+    // to a plain object so we can read header names. Token presence is a
+    // boolean, so we don't even bother decrypting it; non-null is enough.
+    const decryptedHeaders =
+        decryptJsonBlob<Record<string, string>>(headers) ?? {};
     return {
         ...rest,
-        header_keys: headers ? Object.keys(headers) : [],
+        header_keys: Object.keys(decryptedHeaders),
         // Boolean only — never round-trip the actual access token to the
         // browser, even to the row's owner.
-        oauth_authorized: !!tokens,
+        oauth_authorized: tokens !== null && tokens !== undefined,
     };
 }
 
@@ -206,6 +213,11 @@ mcpServersRouter.post("/", requireAuth, async (req, res) => {
     const enabled = body.enabled === false ? false : true;
 
     const db = createServerSupabase();
+    // headers is encrypted-at-rest as an `enc:v1:` string in the jsonb column.
+    // OAuth-mode rows have no static headers, so we store an empty (encrypted)
+    // object rather than `null` for shape consistency on read.
+    const headersToStore =
+        auth_type === "oauth" ? {} : headersOk.value;
     const { data, error } = await db
         .from("user_mcp_servers")
         .insert({
@@ -213,7 +225,7 @@ mcpServersRouter.post("/", requireAuth, async (req, res) => {
             slug,
             name,
             url,
-            headers: auth_type === "oauth" ? {} : headersOk.value,
+            headers: encryptJsonBlob(headersToStore) ?? {},
             enabled,
             auth_type,
         })
@@ -253,12 +265,12 @@ mcpServersRouter.patch("/:id", requireAuth, async (req, res) => {
         update.oauth_tokens = null;
         update.oauth_metadata = null;
         update.oauth_code_verifier = null;
-        update.headers = {};
+        update.headers = encryptJsonBlob({}) ?? {};
     }
     if (body.headers !== undefined) {
         const headersOk = validateHeaders(body.headers);
         if (!headersOk.ok) return void res.status(400).json({ detail: headersOk.error });
-        update.headers = headersOk.value;
+        update.headers = encryptJsonBlob(headersOk.value) ?? {};
     }
     if (body.enabled !== undefined) {
         update.enabled = body.enabled === true;
@@ -318,9 +330,13 @@ mcpServersRouter.post("/:id/test", requireAuth, async (req, res) => {
         row.auth_type === "oauth"
             ? new DbOAuthProvider(db, id, userId, "use")
             : undefined;
+    // headers may be encrypted-at-rest; decryptJsonBlob handles both the
+    // ciphertext and legacy plaintext-jsonb cases transparently.
+    const decryptedHeaders =
+        decryptJsonBlob<Record<string, string>>(row.headers) ?? {};
     const client = new McpHttpClient(
         row.url,
-        (row.headers ?? {}) as Record<string, string>,
+        decryptedHeaders,
         provider,
     );
     try {

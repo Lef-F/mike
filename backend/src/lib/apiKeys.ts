@@ -117,3 +117,63 @@ export function encryptApiKeyInputs(
     }
     return updates;
 }
+
+// ---------------------------------------------------------------------------
+// JSON-blob helpers — used for MCP credentials (headers + oauth_tokens).
+//
+// Storage format: we JSON-serialize the value, encrypt the resulting string
+// with the same AES-256-GCM envelope as the per-key helpers above, and write
+// the ciphertext string into the jsonb column. A JSON string is itself valid
+// jsonb, so this round-trips cleanly without needing a column type change.
+// On read we sniff `typeof value === "string" && startsWith("enc:v1:")` to
+// distinguish encrypted blobs from legacy plaintext objects.
+//
+// Encrypting the whole blob (rather than each leaf) keeps the format simple,
+// minimizes cipher operations, and avoids leaking the shape (e.g. "this row
+// has a refresh_token" vs "only an access_token") to anyone who can read the
+// table.
+// ---------------------------------------------------------------------------
+
+/**
+ * Encrypts an arbitrary JSON-serializable value to an `enc:v1:` ciphertext
+ * string suitable for storing in a jsonb column. Returns null for null/
+ * undefined/empty inputs so callers can pass through "no value" cleanly.
+ */
+export function encryptJsonBlob(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    const serialized = JSON.stringify(value);
+    if (!serialized) return null;
+    return encryptApiKey(serialized);
+}
+
+/**
+ * Reverse of {@link encryptJsonBlob}. Accepts an encrypted ciphertext string,
+ * a legacy plaintext object/array (returned as-is), or null/undefined. Throws
+ * only if the value is an `enc:v1:` envelope but the ciphertext is malformed
+ * or the encryption key is wrong.
+ */
+export function decryptJsonBlob<T = unknown>(
+    value: unknown,
+): T | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === "string" && isEncryptedApiKey(value)) {
+        const plaintext = decryptApiKey(value);
+        if (plaintext === null) return null;
+        return JSON.parse(plaintext) as T;
+    }
+    // Legacy plaintext path: the column was written before encryption was
+    // enabled, so the jsonb already holds the structured value directly.
+    return value as T;
+}
+
+/**
+ * True if the given jsonb-shaped value looks like a legacy plaintext blob
+ * that should be opportunistically re-encrypted. Strings that already carry
+ * the `enc:v1:` envelope are skipped; null/undefined are skipped; everything
+ * else (objects, arrays, plain strings without the envelope) is a candidate.
+ */
+export function needsJsonBlobUpgrade(value: unknown): boolean {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string" && isEncryptedApiKey(value)) return false;
+    return true;
+}
