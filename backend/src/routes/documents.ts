@@ -792,7 +792,7 @@ documentsRouter.post(
   (req, res) => void handleEditResolution(req, res, "reject"),
 );
 
-async function handleDocumentUpload(
+export async function handleDocumentUpload(
   req: import("express").Request,
   res: import("express").Response,
   userId: string,
