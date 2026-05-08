@@ -27,4 +27,13 @@ done
 echo "init-db: applying /migrations/000_one_shot_schema.sql"
 psql -v ON_ERROR_STOP=1 -f /migrations/000_one_shot_schema.sql
 
+# Apply incremental migrations (00[1-9]_*.sql) in order. Each is
+# idempotent (CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS / etc.)
+# so re-running on every boot is safe.
+for migration in /migrations/0[1-9][0-9]_*.sql /migrations/00[1-9]_*.sql; do
+  [ -f "$migration" ] || continue
+  echo "init-db: applying $migration"
+  psql -v ON_ERROR_STOP=1 -f "$migration"
+done
+
 echo "init-db: complete"
