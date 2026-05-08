@@ -40,20 +40,6 @@ export function oauthCallbackUrl(): string {
 // tokens and would already have to be rotated on compromise.
 // ---------------------------------------------------------------------------
 
-function b64url(buf: Buffer): string {
-    return buf
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
-}
-
-function b64urlDecode(s: string): Buffer {
-    let t = s.replace(/-/g, "+").replace(/_/g, "/");
-    while (t.length % 4) t += "=";
-    return Buffer.from(t, "base64");
-}
-
 export function signOAuthState(payload: {
     user_id: string;
     server_id: string;
@@ -62,9 +48,9 @@ export function signOAuthState(payload: {
         ...payload,
         exp: Math.floor(Date.now() / 1000) + STATE_TTL_SECONDS,
     };
-    const enc = b64url(Buffer.from(JSON.stringify(body), "utf8"));
+    const enc = Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
     const sig = crypto.createHmac("sha256", getSigningSecret()).update(enc).digest();
-    return `${enc}.${b64url(sig)}`;
+    return `${enc}.${sig.toString("base64url")}`;
 }
 
 export function verifyOAuthState(
@@ -77,7 +63,7 @@ export function verifyOAuthState(
         .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
-    const expectedEnc = b64url(expected);
+    const expectedEnc = expected.toString("base64url");
     if (sigEnc.length !== expectedEnc.length) return null;
     if (
         !crypto.timingSafeEqual(Buffer.from(sigEnc), Buffer.from(expectedEnc))
@@ -85,7 +71,7 @@ export function verifyOAuthState(
         return null;
     }
     try {
-        const body = JSON.parse(b64urlDecode(enc).toString("utf8")) as {
+        const body = JSON.parse(Buffer.from(enc, "base64url").toString("utf8")) as {
             user_id: string;
             server_id: string;
             exp: number;

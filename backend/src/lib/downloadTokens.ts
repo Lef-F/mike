@@ -26,20 +26,6 @@ export function getSigningSecret(): string {
     return secret.trim();
 }
 
-function b64urlEncode(buf: Buffer): string {
-    return buf
-        .toString("base64")
-        .replace(/\+/g, "-")
-        .replace(/\//g, "_")
-        .replace(/=+$/g, "");
-}
-
-function b64urlDecode(s: string): Buffer {
-    let t = s.replace(/-/g, "+").replace(/_/g, "/");
-    while (t.length % 4) t += "=";
-    return Buffer.from(t, "base64");
-}
-
 function timingSafeEqStr(a: string, b: string): boolean {
     if (a.length !== b.length) return false;
     return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -47,12 +33,12 @@ function timingSafeEqStr(a: string, b: string): boolean {
 
 export function signDownload(path: string, filename: string): string {
     const payload = JSON.stringify({ p: path, f: filename });
-    const enc = b64urlEncode(Buffer.from(payload, "utf8"));
+    const enc = Buffer.from(payload, "utf8").toString("base64url");
     const sig = crypto
         .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
-    return `${enc}.${b64urlEncode(sig)}`;
+    return `${enc}.${sig.toString("base64url")}`;
 }
 
 export function verifyDownload(
@@ -65,9 +51,9 @@ export function verifyDownload(
         .createHmac("sha256", getSigningSecret())
         .update(enc)
         .digest();
-    if (!timingSafeEqStr(sigEnc, b64urlEncode(expected))) return null;
+    if (!timingSafeEqStr(sigEnc, expected.toString("base64url"))) return null;
     try {
-        const parsed = JSON.parse(b64urlDecode(enc).toString("utf8")) as {
+        const parsed = JSON.parse(Buffer.from(enc, "base64url").toString("utf8")) as {
             p: string;
             f: string;
         };

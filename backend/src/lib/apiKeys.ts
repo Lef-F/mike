@@ -16,14 +16,6 @@ function keyFromSecret(secret: string): Buffer {
     return crypto.createHash("sha256").update(secret, "utf8").digest();
 }
 
-function b64url(buf: Buffer): string {
-    return buf.toString("base64url");
-}
-
-function fromB64url(value: string): Buffer {
-    return Buffer.from(value, "base64url");
-}
-
 export function isEncryptedApiKey(value: string | null | undefined): boolean {
     return typeof value === "string" && value.startsWith(ENCRYPTED_PREFIX);
 }
@@ -43,7 +35,7 @@ export function encryptApiKey(value: string | null | undefined): string | null {
         cipher.final(),
     ]);
     const tag = cipher.getAuthTag();
-    return `${ENCRYPTED_PREFIX}${b64url(iv)}.${b64url(tag)}.${b64url(ciphertext)}`;
+    return `${ENCRYPTED_PREFIX}${iv.toString("base64url")}.${tag.toString("base64url")}.${ciphertext.toString("base64url")}`;
 }
 
 export function decryptApiKey(value: string | null | undefined): string | null {
@@ -63,11 +55,11 @@ export function decryptApiKey(value: string | null | undefined): string | null {
     const decipher = crypto.createDecipheriv(
         "aes-256-gcm",
         keyFromSecret(getEncryptionSecret()),
-        fromB64url(ivRaw),
+        Buffer.from(ivRaw, "base64url"),
     );
-    decipher.setAuthTag(fromB64url(tagRaw));
+    decipher.setAuthTag(Buffer.from(tagRaw, "base64url"));
     const plaintext = Buffer.concat([
-        decipher.update(fromB64url(ciphertextRaw)),
+        decipher.update(Buffer.from(ciphertextRaw, "base64url")),
         decipher.final(),
     ]);
     return plaintext.toString("utf8");
