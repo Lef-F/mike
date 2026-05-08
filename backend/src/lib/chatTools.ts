@@ -1511,10 +1511,13 @@ export async function runToolCalls(
                     tool: originalName,
                 })}\n\n`,
             );
-            const content = await server.client.callTool(originalName, args);
-            // The model gets the untruncated content; the user-facing preview
-            // is capped to keep chat_messages.content from bloating.
-            const ok = !content.startsWith(`MCP tool '${originalName}' `);
+            const { ok, content } = await server.client.callTool(
+                originalName,
+                args,
+            );
+            // The model already sees content capped at MCP_MAX_TOOL_BYTES
+            // (mcp/client.ts); the user-facing preview is further capped here
+            // to keep chat_messages.content from bloating.
             const preview: McpToolResultEvent = {
                 type: "mcp_tool_result",
                 server: server.row.name,

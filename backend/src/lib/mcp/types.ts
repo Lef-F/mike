@@ -32,7 +32,18 @@ export type LoadedMcpServer = {
         callTool: (
             toolName: string,
             args: Record<string, unknown>,
-        ) => Promise<string>;
+        ) => Promise<McpToolResult>;
         close: () => Promise<void>;
     };
+};
+
+/**
+ * Structured result from an MCP tool call. `ok` carries success vs error
+ * directly so callers don't have to sniff message prefixes; `truncated` is
+ * true when `content` was clipped to the model-side size cap.
+ */
+export type McpToolResult = {
+    ok: boolean;
+    content: string;
+    truncated: boolean;
 };
