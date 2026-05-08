@@ -3,6 +3,7 @@
 // Mounted at `/user/mcp-servers`. The backend uses Supabase's service role
 // (bypassing RLS), so every handler MUST filter by `user_id = userId`.
 
+import net from "net";
 import { Router } from "express";
 import { auth as runOAuth } from "@modelcontextprotocol/sdk/client/auth.js";
 import { requireAuth } from "../middleware/auth";
@@ -38,6 +39,40 @@ function deriveSlug(name: string): string {
     return base || "mcp";
 }
 
+// Block obvious SSRF targets at submit time: private/reserved IP literals,
+// link-local, and single-label hostnames that almost always resolve to
+// cluster-internal services (e.g. "postgres", "garage", "redis"). Set
+// MCP_ALLOW_PRIVATE_HOSTS=true to bypass — useful for laptop dev where you
+// might run an MCP server on a docker service alias.
+//
+// This is point-in-time validation only; it does not defend against DNS
+// rebinding or runtime resolution to a private IP. Closing that loop would
+// require per-request DNS resolution + bind-to-IP at fetch time.
+function isPrivateIPv4(host: string): boolean {
+    if (!net.isIPv4(host)) return false;
+    const parts = host.split(".").map((n) => Number(n));
+    return (
+        parts[0] === 0 ||
+        parts[0] === 10 ||
+        (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+        (parts[0] === 192 && parts[1] === 168) ||
+        (parts[0] === 169 && parts[1] === 254) ||
+        parts[0] === 127
+    );
+}
+
+function isPrivateIPv6(host: string): boolean {
+    if (!net.isIPv6(host)) return false;
+    const lo = host.toLowerCase();
+    return (
+        lo === "::1" ||
+        lo.startsWith("fc") ||
+        lo.startsWith("fd") ||
+        lo.startsWith("fe80") ||
+        lo === "::"
+    );
+}
+
 function validateUrl(raw: string): { ok: true } | { ok: false; error: string } {
     let parsed: URL;
     try {
@@ -45,14 +80,39 @@ function validateUrl(raw: string): { ok: true } | { ok: false; error: string } {
     } catch {
         return { ok: false, error: "url is not a valid URL" };
     }
-    if (parsed.protocol === "https:") return { ok: true };
-    if (
-        parsed.protocol === "http:" &&
-        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1")
-    ) {
-        return { ok: true };
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+        return { ok: false, error: "url must use http or https" };
     }
-    return { ok: false, error: "url must use https (or http://localhost)" };
+    const allowPrivate = process.env.MCP_ALLOW_PRIVATE_HOSTS === "true";
+    const host = parsed.hostname.toLowerCase();
+    if (!allowPrivate) {
+        if (host === "localhost") {
+            return {
+                ok: false,
+                error:
+                    "localhost is blocked; set MCP_ALLOW_PRIVATE_HOSTS=true for local development",
+            };
+        }
+        if (isPrivateIPv4(host)) {
+            return { ok: false, error: `${host} is in a private/reserved IPv4 range` };
+        }
+        if (isPrivateIPv6(host)) {
+            return { ok: false, error: `${host} is in a private/reserved IPv6 range` };
+        }
+        if (!host.includes(".")) {
+            return {
+                ok: false,
+                error: `single-label hostname "${host}" looks cluster-internal; set MCP_ALLOW_PRIVATE_HOSTS=true if intentional`,
+            };
+        }
+    }
+    if (parsed.protocol === "http:" && !allowPrivate) {
+        return {
+            ok: false,
+            error: "url must use https (or set MCP_ALLOW_PRIVATE_HOSTS=true for plaintext localhost development)",
+        };
+    }
+    return { ok: true };
 }
 
 function validateHeaders(
@@ -186,6 +246,14 @@ mcpServersRouter.patch("/:id", requireAuth, async (req, res) => {
         const urlOk = validateUrl(url);
         if (!urlOk.ok) return void res.status(400).json({ detail: urlOk.error });
         update.url = url;
+        // Changing the URL invalidates every credential that was negotiated
+        // for the previous origin. Without these clears, the next call would
+        // send the old server's bearer/refresh tokens to the new authority —
+        // a token leak. Re-running OAuth (or re-supplying headers) is required.
+        update.oauth_tokens = null;
+        update.oauth_metadata = null;
+        update.oauth_code_verifier = null;
+        update.headers = {};
     }
     if (body.headers !== undefined) {
         const headersOk = validateHeaders(body.headers);
