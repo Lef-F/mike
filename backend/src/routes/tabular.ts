@@ -181,8 +181,18 @@ tabularRouter.get("/", requireAuth, async (req, res) => {
             ? db
                   .from("tabular_reviews")
                   .select("*")
-                  .is("project_id", null)
-                  .contains("shared_with", [userEmail])
+                  // Two fixes here vs. the previous form:
+                  // 1. shared_with is jsonb, so `.contains` needs the JSON
+                  //    array literal (`["foo@bar"]`), not the Postgres array
+                  //    literal (`{foo@bar}`) — bare arrays produced
+                  //    "invalid input syntax for type json" 400s, swallowed
+                  //    by the catch below as if the column hadn't migrated.
+                  // 2. Lowercase the JWT email so providers issuing mixed-case
+                  //    emails still match the (lowercased on insert) rows.
+                  .contains(
+                      "shared_with",
+                      JSON.stringify([userEmail.toLowerCase()]),
+                  )
                   .neq("user_id", userId)
                   .order("created_at", { ascending: false })
             : Promise.resolve({

@@ -139,13 +139,16 @@ export async function listAccessibleProjectIds(
     userEmail: string | null | undefined,
     db: Db,
 ): Promise<string[]> {
+    // Stored shared_with values are lowercase; lowercase the JWT email too
+    // so providers that issue mixed-case email claims still match the row.
+    const email = userEmail?.toLowerCase();
     const [{ data: own }, { data: shared }] = await Promise.all([
         db.from("projects").select("id").eq("user_id", userId),
-        userEmail
+        email
             ? db
                   .from("projects")
                   .select("id")
-                  .contains("shared_with", JSON.stringify([userEmail]))
+                  .contains("shared_with", JSON.stringify([email]))
                   .neq("user_id", userId)
             : Promise.resolve({ data: [] as { id: string }[] }),
     ]);

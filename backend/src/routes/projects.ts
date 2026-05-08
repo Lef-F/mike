@@ -16,7 +16,11 @@ export const projectsRouter = Router();
 // GET /projects
 projectsRouter.get("/", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  const userEmail = res.locals.userEmail as string;
+  // Stored shared_with values are normalised to lowercase on PATCH/POST,
+  // so the lookup must lowercase the JWT email too — Google/Microsoft/etc.
+  // can issue tokens with mixed-case emails and a mismatch silently makes
+  // the row invisible.
+  const userEmail = (res.locals.userEmail as string | undefined)?.toLowerCase();
   const db = createServerSupabase();
 
   const { data: ownProjects, error: ownError } = await db
@@ -99,7 +103,7 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
 // GET /projects/:projectId
 projectsRouter.get("/:projectId", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  const userEmail = res.locals.userEmail as string;
+  const userEmail = (res.locals.userEmail as string | undefined)?.toLowerCase();
   const { projectId } = req.params;
   const db = createServerSupabase();
 
