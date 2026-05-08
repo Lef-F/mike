@@ -169,7 +169,7 @@ function TabularModelDropdown({
                                         onSelect={() => onChange(m.id)}
                                         title={
                                             !available
-                                                ? `Add a ${provider === "claude" ? "Claude" : "Gemini"} API key to use this model`
+                                                ? `Add a ${provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : "OpenRouter"} API key to use this model`
                                                 : undefined
                                         }
                                     >

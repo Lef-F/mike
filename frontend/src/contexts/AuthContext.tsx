@@ -47,7 +47,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     id: session.user.id,
                     email: session.user.email || "",
                 });
-                ensureProfile(session.access_token);
+                await ensureProfile(session.access_token);
             }
             setAuthLoading(false);
         };
@@ -62,7 +62,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     id: session.user.id,
                     email: session.user.email || "",
                 });
-                ensureProfile(session.access_token);
+                await ensureProfile(session.access_token);
             } else {
                 setUser(null);
             }
