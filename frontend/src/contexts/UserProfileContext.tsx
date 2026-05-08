@@ -27,7 +27,7 @@ interface ServerProfile {
     has_openrouter_api_key: boolean;
 }
 
-interface UserProfile {
+export interface UserProfile {
     displayName: string | null;
     organisation: string | null;
     messageCreditsUsed: number;

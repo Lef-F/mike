@@ -15,6 +15,7 @@ import {
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import { MODELS } from "@/app/components/assistant/ModelToggle";
 import {
+    apiKeysFromProfile,
     isModelAvailable,
     modelGroupToProvider,
 } from "@/app/lib/modelAvailability";
@@ -41,17 +42,7 @@ export default function ModelsAndApiKeysPage() {
                                 profile?.tabularModel ??
                                 "gemini-3-flash-preview"
                             }
-                            apiKeys={{
-                                claudeApiKey: profile?.hasClaudeApiKey
-                                    ? "configured"
-                                    : null,
-                                geminiApiKey: profile?.hasGeminiApiKey
-                                    ? "configured"
-                                    : null,
-                                openrouterApiKey: profile?.hasOpenrouterApiKey
-                                    ? "configured"
-                                    : null,
-                            }}
+                            apiKeys={apiKeysFromProfile(profile)}
                             onChange={(id) =>
                                 updateModelPreference("tabularModel", id)
                             }

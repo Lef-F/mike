@@ -26,6 +26,7 @@ import { ModelToggle } from "./ModelToggle";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
+    apiKeysFromProfile,
     getModelProvider,
     isModelAvailable,
     type ModelProvider,
@@ -68,11 +69,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     } | null>(null);
     const [model, setModel] = useSelectedModel();
     const { profile } = useUserProfile();
-    const apiKeys = {
-        claudeApiKey: profile?.hasClaudeApiKey ? "configured" : null,
-        geminiApiKey: profile?.hasGeminiApiKey ? "configured" : null,
-        openrouterApiKey: profile?.hasOpenrouterApiKey ? "configured" : null,
-    };
+    const apiKeys = apiKeysFromProfile(profile);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [docSelectorOpen, setDocSelectorOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);

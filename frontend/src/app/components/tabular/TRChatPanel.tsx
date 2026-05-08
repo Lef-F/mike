@@ -33,6 +33,7 @@ import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { PreResponseWrapper } from "../shared/PreResponseWrapper";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
+    apiKeysFromProfile,
     getModelProvider,
     isModelAvailable,
     type ModelProvider,
@@ -617,11 +618,7 @@ export function TRChatPanel({
     onChatIdChange,
 }: Props) {
     const { profile, updateModelPreference } = useUserProfile();
-    const apiKeys = {
-        claudeApiKey: profile?.hasClaudeApiKey ? "configured" : null,
-        geminiApiKey: profile?.hasGeminiApiKey ? "configured" : null,
-        openrouterApiKey: profile?.hasOpenrouterApiKey ? "configured" : null,
-    };
+    const apiKeys = apiKeysFromProfile(profile);
     const currentModel = profile?.tabularModel ?? "gemini-3-flash-preview";
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);

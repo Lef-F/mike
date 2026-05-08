@@ -1,4 +1,5 @@
 import { MODELS, type ModelOption } from "../components/assistant/ModelToggle";
+import type { UserProfile } from "@/contexts/UserProfileContext";
 
 export type ModelProvider = "claude" | "gemini" | "openrouter";
 
@@ -38,6 +39,16 @@ export function providerLabel(provider: ModelProvider): string {
     if (provider === "gemini") return "Google (Gemini)";
     if (provider === "openrouter") return "OpenRouter";
     return "";
+}
+
+export function apiKeysFromProfile(profile: UserProfile | null) {
+    return {
+        claudeApiKey: profile?.hasClaudeApiKey ? ("configured" as const) : null,
+        geminiApiKey: profile?.hasGeminiApiKey ? ("configured" as const) : null,
+        openrouterApiKey: profile?.hasOpenrouterApiKey
+            ? ("configured" as const)
+            : null,
+    };
 }
 
 export function modelGroupToProvider(
