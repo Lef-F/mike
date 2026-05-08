@@ -13,8 +13,8 @@ export const GEMINI_MAIN_MODELS = [
 // OpenRouter main-chat tier
 export const OPENROUTER_MAIN_MODELS = [
     "openrouter/openai/gpt-5.3-chat",
-    "openrouter/anthropic/claude-sonnet-4.6",
-    "openrouter/anthropic/claude-opus-4.7",
+    "openrouter/anthropic/claude-sonnet-4-6",
+    "openrouter/anthropic/claude-opus-4-7",
     "openrouter/x-ai/grok-4.3",
     "openrouter/openai/gpt-4o-mini",
 ] as const;

@@ -6,6 +6,7 @@ import type {
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
 const MAX_TOKENS = 16384;
+const DEBUG_LLM_STREAM = process.env.DEBUG_LLM_STREAM === "true";
 
 type OpenRouterMessage = {
     role: "system" | "user" | "assistant" | "tool";
@@ -142,7 +143,9 @@ export async function streamOpenRouter(
                     continue;
                 }
 
-                console.log("[openrouter stream chunk]", JSON.stringify(chunk, null, 2));
+                if (DEBUG_LLM_STREAM) {
+                    console.log("[openrouter stream chunk]", JSON.stringify(chunk, null, 2));
+                }
 
                 const choice = chunk.choices?.[0];
                 if (!choice?.delta) continue;
@@ -161,6 +164,10 @@ export async function streamOpenRouter(
                             // Accumulate function arguments
                             if (tc.function?.arguments) {
                                 existing.arguments += tc.function.arguments;
+                            }
+                            // Backfill id when first delta used a synthetic fallback
+                            if (tc.id && (!existing.id || existing.id.startsWith("tool-"))) {
+                                existing.id = tc.id;
                             }
                         } else {
                             // New tool call
