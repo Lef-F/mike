@@ -40,6 +40,9 @@ alter table public.tabular_reviews enable row level security;
 alter table public.tabular_cells enable row level security;
 alter table public.tabular_review_chats enable row level security;
 alter table public.tabular_review_chat_messages enable row level security;
+-- user_mcp_servers is RLS-on by default (per migration 002), but include
+-- it here so the lockdown is explicit and re-runnable.
+alter table public.user_mcp_servers enable row level security;
 
 drop policy if exists "Users can view their own profile" on public.user_profiles;
 drop policy if exists "Users can update their own profile" on public.user_profiles;
@@ -59,3 +62,6 @@ revoke all on public.tabular_reviews from anon, authenticated;
 revoke all on public.tabular_cells from anon, authenticated;
 revoke all on public.tabular_review_chats from anon, authenticated;
 revoke all on public.tabular_review_chat_messages from anon, authenticated;
+-- user_mcp_servers carries OAuth tokens and Authorization headers; it
+-- absolutely must not be reachable via PostgREST under anon/authenticated.
+revoke all on public.user_mcp_servers from anon, authenticated;

@@ -572,3 +572,6 @@ revoke all on public.tabular_reviews from anon, authenticated;
 revoke all on public.tabular_cells from anon, authenticated;
 revoke all on public.tabular_review_chats from anon, authenticated;
 revoke all on public.tabular_review_chat_messages from anon, authenticated;
+-- user_mcp_servers carries OAuth tokens and Authorization headers; it
+-- absolutely must not be reachable via PostgREST under anon/authenticated.
+revoke all on public.user_mcp_servers from anon, authenticated;
