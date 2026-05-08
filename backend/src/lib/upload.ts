@@ -6,7 +6,7 @@ export const MAX_UPLOAD_SIZE_BYTES = 100 * 1024 * 1024;
 export const MAX_UPLOAD_SIZE_MB = Math.round(
   MAX_UPLOAD_SIZE_BYTES / (1024 * 1024),
 );
-const MAX_DOCX_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
+const MAX_DOCX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
 
 const memoryUpload = multer({
   storage: multer.memoryStorage(),
@@ -55,7 +55,10 @@ export async function validateDocumentUpload(
   }
 
   if (suffix === "pdf") {
-    if (!file.buffer.subarray(0, 5).equals(Buffer.from("%PDF-"))) {
+    // PDF 1.4 §3.4.1 allows %PDF- to appear within the first 1024 bytes,
+    // not necessarily at offset 0 (e.g. leading whitespace or BOM).
+    const head = file.buffer.subarray(0, Math.min(1024, file.buffer.length));
+    if (!head.includes(Buffer.from("%PDF-"))) {
       throw new Error("Uploaded PDF does not have a valid PDF header.");
     }
     return { suffix, contentType: "application/pdf" };
@@ -80,15 +83,17 @@ export async function validateDocumentUpload(
       throw new Error("Uploaded DOCX is missing required Word document parts.");
     }
 
+    // Decompressing each entry to measure size is necessary because the
+    // private JSZip._data.uncompressedSize field returns undefined for
+    // store-only (method=0) entries, allowing a zip bomb to bypass the check.
     let totalUncompressed = 0;
-    zip.forEach((_path, entry) => {
-      const data = entry as unknown as {
-        _data?: { uncompressedSize?: number };
-      };
-      totalUncompressed += data._data?.uncompressedSize ?? 0;
-    });
-    if (totalUncompressed > MAX_DOCX_UNCOMPRESSED_BYTES) {
-      throw new Error("Uploaded DOCX expands beyond the allowed size.");
+    for (const [, entry] of Object.entries(zip.files)) {
+      if (entry.dir) continue;
+      const buf = await entry.async("nodebuffer");
+      totalUncompressed += buf.byteLength;
+      if (totalUncompressed > MAX_DOCX_UNCOMPRESSED_BYTES) {
+        throw new Error("Uploaded DOCX expands beyond the allowed size.");
+      }
     }
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("Uploaded DOCX")) {

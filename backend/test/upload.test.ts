@@ -52,6 +52,24 @@ describe("document upload validation", () => {
         );
     });
 
+    it("accepts a PDF with leading whitespace before %PDF-", async () => {
+        const buf = Buffer.concat([Buffer.from("\n"), Buffer.from("%PDF-1.7")]);
+        assert.deepEqual(
+            await validateDocumentUpload(upload("contract.pdf", buf)),
+            { suffix: "pdf", contentType: "application/pdf" },
+        );
+    });
+
+    it("rejects a zip renamed to .docx that lacks word/document.xml", async () => {
+        const zip = new JSZip();
+        zip.file("random.txt", "not a word document");
+        const buf = await zip.generateAsync({ type: "nodebuffer" });
+        await assert.rejects(
+            validateDocumentUpload(upload("contract.docx", buf)),
+            /missing required Word document parts/,
+        );
+    });
+
     it("rejects mismatched and malformed document bytes", async () => {
         await assert.rejects(
             validateDocumentUpload(upload("contract.pdf", Buffer.from("not pdf"))),
