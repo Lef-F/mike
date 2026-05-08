@@ -1,8 +1,7 @@
 import { createServerSupabase } from "./supabase";
 import {
     decryptApiKey,
-    encryptApiKey,
-    isEncryptedApiKey,
+    buildPlaintextUpgrades,
 } from "./apiKeys";
 import {
     resolveModel,
@@ -80,20 +79,11 @@ async function decryptAndUpgradeApiKeys(
         openrouter: decryptApiKey(storedOpenrouter),
     };
 
-    const updates: Record<string, string> = {};
-    if (apiKeys.claude && storedClaude && !isEncryptedApiKey(storedClaude)) {
-        updates.claude_api_key = encryptApiKey(apiKeys.claude)!;
-    }
-    if (apiKeys.gemini && storedGemini && !isEncryptedApiKey(storedGemini)) {
-        updates.gemini_api_key = encryptApiKey(apiKeys.gemini)!;
-    }
-    if (
-        apiKeys.openrouter &&
-        storedOpenrouter &&
-        !isEncryptedApiKey(storedOpenrouter)
-    ) {
-        updates.openrouter_api_key = encryptApiKey(apiKeys.openrouter)!;
-    }
+    const updates = buildPlaintextUpgrades({
+        claude_api_key: storedClaude,
+        gemini_api_key: storedGemini,
+        openrouter_api_key: storedOpenrouter,
+    });
     if (Object.keys(updates).length > 0) {
         await client
             .from("user_profiles")

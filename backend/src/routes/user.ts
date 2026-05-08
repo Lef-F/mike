@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../middleware/auth";
 import { createServerSupabase } from "../lib/supabase";
-import { encryptApiKey, hasStoredApiKey } from "../lib/apiKeys";
+import { encryptApiKeyInputs, hasStoredApiKey } from "../lib/apiKeys";
 import { resolveModel, DEFAULT_TABULAR_MODEL } from "../lib/llm";
 
 export const userRouter = Router();
@@ -96,20 +96,7 @@ userRouter.patch("/profile", requireAuth, async (req, res) => {
     );
   }
   if (req.body.api_keys && typeof req.body.api_keys === "object") {
-    const apiKeys = req.body.api_keys as {
-      claude?: string | null;
-      gemini?: string | null;
-      openrouter?: string | null;
-    };
-    if ("claude" in apiKeys) {
-      updates.claude_api_key = encryptApiKey(apiKeys.claude);
-    }
-    if ("gemini" in apiKeys) {
-      updates.gemini_api_key = encryptApiKey(apiKeys.gemini);
-    }
-    if ("openrouter" in apiKeys) {
-      updates.openrouter_api_key = encryptApiKey(apiKeys.openrouter);
-    }
+    Object.assign(updates, encryptApiKeyInputs(req.body.api_keys as Record<string, string | null>));
   }
   if (req.body.increment_message_credits === true) {
     const { data: current } = await db
