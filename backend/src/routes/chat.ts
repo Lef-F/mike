@@ -13,6 +13,10 @@ import {
 import { completeText } from "../lib/llm";
 import { getUserApiKeys, getUserModelSettings } from "../lib/userSettings";
 import { checkProjectAccess } from "../lib/access";
+import {
+    closeMcpServers,
+    loadEnabledMcpServersForUser,
+} from "../lib/mcp/servers";
 
 export const chatRouter = Router();
 
@@ -443,6 +447,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
     const write = (line: string) => res.write(line);
 
     const apiKeys = await getUserApiKeys(userId, db);
+    const mcpServers = await loadEnabledMcpServersForUser(userId, db);
 
     try {
         write(`data: ${JSON.stringify({ type: "chat_id", chatId })}\n\n`);
@@ -458,6 +463,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             model,
             apiKeys,
             projectId: project_id ?? null,
+            mcpServers,
         });
 
         console.log("[chat/stream] LLM stream finished", {
@@ -490,6 +496,7 @@ chatRouter.post("/", requireAuth, async (req, res) => {
             /* ignore */
         }
     } finally {
+        await closeMcpServers(mcpServers);
         res.end();
     }
 });
