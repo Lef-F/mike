@@ -8,26 +8,17 @@ import React, {
     ReactNode,
     useCallback,
 } from "react";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import {
+    type ApiKeyState,
+    type ApiKeyProvider,
+    type UserProfile as ApiUserProfile,
+    getUserProfile,
+    saveApiKey,
+    updateUserProfile,
+} from "@/app/lib/mikeApi";
 
-const API_BASE =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
-const MONTHLY_CREDIT_LIMIT = 999999;
-
-interface ServerProfile {
-    display_name: string | null;
-    organisation: string | null;
-    message_credits_used: number;
-    credits_reset_date: string;
-    tier: string;
-    tabular_model: string;
-    has_claude_api_key: boolean;
-    has_gemini_api_key: boolean;
-    has_openrouter_api_key: boolean;
-}
-
-export interface UserProfile {
+interface UserProfile {
     displayName: string | null;
     organisation: string | null;
     messageCreditsUsed: number;
@@ -35,9 +26,7 @@ export interface UserProfile {
     creditsRemaining: number;
     tier: string;
     tabularModel: string;
-    hasClaudeApiKey: boolean;
-    hasGeminiApiKey: boolean;
-    hasOpenrouterApiKey: boolean;
+    apiKeys: ApiKeyState;
 }
 
 interface UserProfileContextType {
@@ -50,7 +39,7 @@ interface UserProfileContextType {
         value: string,
     ) => Promise<boolean>;
     updateApiKey: (
-        provider: "claude" | "gemini" | "openrouter",
+        provider: ApiKeyProvider,
         value: string | null,
     ) => Promise<boolean>;
     reloadProfile: () => Promise<void>;
@@ -61,65 +50,32 @@ const UserProfileContext = createContext<UserProfileContextType | undefined>(
     undefined,
 );
 
-async function getAuthHeaders(): Promise<Record<string, string>> {
-    const {
-        data: { session },
-    } = await supabase.auth.getSession();
-    return session?.access_token
-        ? { Authorization: `Bearer ${session.access_token}` }
-        : {};
-}
+const API_KEY_PROVIDERS: ApiKeyProvider[] = ["claude", "gemini", "openai"];
 
-function fallbackProfile(): UserProfile {
-    const reset = new Date();
-    reset.setDate(reset.getDate() + 30);
+function emptyApiKeys(): ApiKeyState {
     return {
-        displayName: null,
-        organisation: null,
-        messageCreditsUsed: 0,
-        creditsResetDate: reset.toISOString(),
-        creditsRemaining: MONTHLY_CREDIT_LIMIT,
-        tier: "Free",
-        tabularModel: "gemini-3-flash-preview",
-        hasClaudeApiKey: false,
-        hasGeminiApiKey: false,
-        hasOpenrouterApiKey: false,
+        claude: { configured: false, source: null },
+        gemini: { configured: false, source: null },
+        openai: { configured: false, source: null },
     };
 }
 
-function mapProfile(data: ServerProfile): UserProfile {
-    const creditsUsed = data.message_credits_used ?? 0;
-    return {
-        displayName: data.display_name,
-        organisation: data.organisation ?? null,
-        messageCreditsUsed: creditsUsed,
-        creditsResetDate: data.credits_reset_date,
-        creditsRemaining: MONTHLY_CREDIT_LIMIT - creditsUsed,
-        tier: data.tier || "Free",
-        tabularModel: data.tabular_model || "gemini-3-flash-preview",
-        hasClaudeApiKey: !!data.has_claude_api_key,
-        hasGeminiApiKey: !!data.has_gemini_api_key,
-        hasOpenrouterApiKey: !!data.has_openrouter_api_key,
-    };
-}
+function toProfile(data: ApiUserProfile): UserProfile {
+    const { apiKeyStatus, ...profile } = data;
+    const apiKeys = emptyApiKeys();
+    for (const provider of API_KEY_PROVIDERS) {
+        apiKeys[provider] = {
+            configured: !!apiKeyStatus[provider],
+            source:
+                apiKeyStatus.sources?.[provider] ??
+                (apiKeyStatus[provider] ? "user" : null),
+        };
+    }
 
-async function profileRequest(
-    method: "GET" | "PATCH",
-    body?: Record<string, unknown>,
-): Promise<UserProfile> {
-    const headers = await getAuthHeaders();
-    const response = await fetch(`${API_BASE}/user/profile`, {
-        method,
-        cache: "no-store",
-        headers: {
-            Accept: "application/json",
-            ...(body ? { "Content-Type": "application/json" } : {}),
-            ...headers,
-        },
-        body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!response.ok) throw new Error(await response.text());
-    return mapProfile((await response.json()) as ServerProfile);
+    return {
+        ...profile,
+        apiKeys,
+    };
 }
 
 export function UserProfileProvider({ children }: { children: ReactNode }) {
@@ -129,9 +85,24 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
 
     const loadProfile = useCallback(async () => {
         try {
-            setProfile(await profileRequest("GET"));
+            const profileData = await getUserProfile();
+            setProfile(toProfile(profileData));
         } catch {
-            setProfile(fallbackProfile());
+            // Calculate a default future reset date for fallback
+            const futureResetDate = new Date();
+            futureResetDate.setDate(futureResetDate.getDate() + 30);
+
+            // Set fallback profile data on exception
+            setProfile({
+                displayName: null,
+                organisation: null,
+                messageCreditsUsed: 0,
+                creditsResetDate: futureResetDate.toISOString(),
+                creditsRemaining: 999999, // temporarily unlimited
+                tier: "Free",
+                tabularModel: "gemini-3-flash-preview",
+                apiKeys: emptyApiKeys(),
+            });
         } finally {
             setLoading(false);
         }
@@ -147,50 +118,109 @@ export function UserProfileProvider({ children }: { children: ReactNode }) {
         }
     }, [isAuthenticated, user, loadProfile]);
 
-    const patchProfile = useCallback(async (body: Record<string, unknown>) => {
-        try {
-            const next = await profileRequest("PATCH", body);
-            setProfile(next);
-            return true;
-        } catch {
-            return false;
-        }
-    }, []);
-
     const updateDisplayName = useCallback(
-        async (displayName: string): Promise<boolean> =>
-            patchProfile({ display_name: displayName }),
-        [patchProfile],
+        async (displayName: string): Promise<boolean> => {
+            if (!user) {
+                return false;
+            }
+
+            try {
+                const updated = await updateUserProfile({ displayName });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
     );
 
     const updateOrganisation = useCallback(
-        async (organisation: string): Promise<boolean> =>
-            patchProfile({ organisation }),
-        [patchProfile],
+        async (organisation: string): Promise<boolean> => {
+            if (!user) return false;
+            try {
+                const updated = await updateUserProfile({ organisation });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
     );
 
     const updateModelPreference = useCallback(
-        async (_field: "tabularModel", value: string): Promise<boolean> =>
-            patchProfile({ tabular_model: value }),
-        [patchProfile],
+        async (field: "tabularModel", value: string): Promise<boolean> => {
+            if (!user) return false;
+            if (field !== "tabularModel") return false;
+            try {
+                const updated = await updateUserProfile({
+                    tabularModel: value,
+                });
+                setProfile((prev) =>
+                    prev ? { ...prev, ...toProfile(updated) } : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
     );
 
     const updateApiKey = useCallback(
         async (
-            provider: "claude" | "gemini" | "openrouter",
+            provider: ApiKeyProvider,
             value: string | null,
-        ): Promise<boolean> => patchProfile({ api_keys: { [provider]: value } }),
-        [patchProfile],
+        ): Promise<boolean> => {
+            if (!user) return false;
+            const normalized = value?.trim() ? value.trim() : null;
+            try {
+                await saveApiKey(provider, normalized);
+                setProfile((prev) =>
+                    prev
+                        ? {
+                              ...prev,
+                              apiKeys: {
+                                  ...prev.apiKeys,
+                                  [provider]: {
+                                      configured: !!normalized,
+                                      source: normalized ? "user" : null,
+                                  },
+                              },
+                          }
+                        : null,
+                );
+                return true;
+            } catch {
+                return false;
+            }
+        },
+        [user],
     );
 
     const reloadProfile = useCallback(async () => {
-        if (user) await loadProfile();
+        if (user) {
+            await loadProfile();
+        }
     }, [user, loadProfile]);
 
     const incrementMessageCredits = useCallback(async (): Promise<boolean> => {
-        if (!user || !profile || profile.creditsRemaining <= 0) return false;
-        return patchProfile({ increment_message_credits: true });
-    }, [user, profile, patchProfile]);
+        if (!user || !profile) {
+            return false;
+        }
+
+        // Check if user has credits remaining
+        if (profile.creditsRemaining <= 0) {
+            return false;
+        }
+
+        return false;
+    }, [user, profile]);
 
     return (
         <UserProfileContext.Provider

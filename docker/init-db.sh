@@ -44,27 +44,28 @@ until [ "$(psql $PSQL_ARGS -tAc "SELECT 1 FROM information_schema.tables WHERE t
   sleep 2
 done
 
-echo "init-db: applying /migrations/000_one_shot_schema.sql"
+echo "init-db: applying /schema.sql (canonical schema from backend/schema.sql)"
 # shellcheck disable=SC2086
-psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f /migrations/000_one_shot_schema.sql
+psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f /schema.sql
 
-# Apply incremental migrations in numeric order, skipping 000.
-# All migrations are idempotent (CREATE OR REPLACE / IF NOT EXISTS / etc.)
-# so re-running on every boot is safe.
+# Apply any fork-specific incremental migrations on top of the canonical
+# schema. The /migrations directory is optional — used only when this fork
+# has additions that aren't yet in upstream's schema.sql. All files must be
+# idempotent (CREATE OR REPLACE / IF NOT EXISTS / etc.) so re-running on
+# every boot stays safe.
 applied=0
-for migration in /migrations/[0-9][0-9][0-9]_*.sql; do
-  # If no files match the glob, the literal pattern is preserved — skip it.
-  case "$migration" in
-    "/migrations/[0-9][0-9][0-9]_*.sql") continue ;;
-  esac
-  case "$(basename "$migration")" in
-    000_*) continue ;;
-  esac
-  echo "init-db: applying $migration"
-  # shellcheck disable=SC2086
-  psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f "$migration"
-  applied=$((applied+1))
-done
-echo "init-db: applied $applied incremental migrations"
+if [ -d /migrations ]; then
+  for migration in /migrations/[0-9][0-9][0-9]_*.sql; do
+    # If no files match the glob, the literal pattern is preserved — skip it.
+    case "$migration" in
+      "/migrations/[0-9][0-9][0-9]_*.sql") continue ;;
+    esac
+    echo "init-db: applying $migration"
+    # shellcheck disable=SC2086
+    psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f "$migration"
+    applied=$((applied+1))
+  done
+fi
+echo "init-db: applied $applied fork-specific incremental migrations"
 
 echo "init-db: complete"

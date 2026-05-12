@@ -9,21 +9,40 @@ import crypto from "crypto";
  * expiry or R2 CORS headaches.
  */
 
-/**
- * Resolves the shared HMAC signing secret. Used here for download tokens
- * and re-exported for other call sites that share the same threat model
- * (e.g. MCP OAuth state tokens in lib/mcp/oauth.ts) so a single env var
- * gates every signed token in the app.
- */
-export function getSigningSecret(): string {
-    const secret = process.env.DOWNLOAD_SIGNING_SECRET;
-    if (!secret?.trim()) {
+function getSecret(): string {
+    const secret =
+        process.env.DOWNLOAD_SIGNING_SECRET ??
+        process.env.SUPABASE_SECRET_KEY;
+    if (!secret) {
         throw new Error(
-            "DOWNLOAD_SIGNING_SECRET is required. " +
+            "DOWNLOAD_SIGNING_SECRET (or SUPABASE_SECRET_KEY as a fallback) must be set. " +
                 "Generate a strong random value (e.g. `openssl rand -hex 32`) and set it in the environment.",
         );
     }
-    return secret.trim();
+    return secret;
+}
+
+/**
+ * Public accessor used by other modules (e.g. MCP OAuth state signing) that
+ * need to derive HMAC signatures from the same secret. Throws if the secret
+ * isn't configured — same as signDownload/verifyDownload.
+ */
+export function getSigningSecret(): string {
+    return getSecret();
+}
+
+function b64urlEncode(buf: Buffer): string {
+    return buf
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/g, "");
+}
+
+function b64urlDecode(s: string): Buffer {
+    let t = s.replace(/-/g, "+").replace(/_/g, "/");
+    while (t.length % 4) t += "=";
+    return Buffer.from(t, "base64");
 }
 
 function timingSafeEqStr(a: string, b: string): boolean {
@@ -33,12 +52,12 @@ function timingSafeEqStr(a: string, b: string): boolean {
 
 export function signDownload(path: string, filename: string): string {
     const payload = JSON.stringify({ p: path, f: filename });
-    const enc = Buffer.from(payload, "utf8").toString("base64url");
+    const enc = b64urlEncode(Buffer.from(payload, "utf8"));
     const sig = crypto
-        .createHmac("sha256", getSigningSecret())
+        .createHmac("sha256", getSecret())
         .update(enc)
         .digest();
-    return `${enc}.${sig.toString("base64url")}`;
+    return `${enc}.${b64urlEncode(sig)}`;
 }
 
 export function verifyDownload(
@@ -48,12 +67,12 @@ export function verifyDownload(
     if (parts.length !== 2) return null;
     const [enc, sigEnc] = parts;
     const expected = crypto
-        .createHmac("sha256", getSigningSecret())
+        .createHmac("sha256", getSecret())
         .update(enc)
         .digest();
-    if (!timingSafeEqStr(sigEnc, expected.toString("base64url"))) return null;
+    if (!timingSafeEqStr(sigEnc, b64urlEncode(expected))) return null;
     try {
-        const parsed = JSON.parse(Buffer.from(enc, "base64url").toString("utf8")) as {
+        const parsed = JSON.parse(b64urlDecode(enc).toString("utf8")) as {
             p: string;
             f: string;
         };

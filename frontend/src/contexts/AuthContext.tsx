@@ -28,15 +28,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [authLoading, setAuthLoading] = useState(true);
 
     useEffect(() => {
-        const ensureProfile = async (accessToken: string) => {
-            const apiBase =
-                process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:3001";
-            await fetch(`${apiBase}/user/profile`, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${accessToken}` },
-            }).catch(() => {});
-        };
-
         const checkUser = async () => {
             const {
                 data: { session },
@@ -47,7 +38,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     id: session.user.id,
                     email: session.user.email || "",
                 });
-                await ensureProfile(session.access_token);
             }
             setAuthLoading(false);
         };
@@ -62,7 +52,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     id: session.user.id,
                     email: session.user.email || "",
                 });
-                await ensureProfile(session.access_token);
             } else {
                 setUser(null);
             }

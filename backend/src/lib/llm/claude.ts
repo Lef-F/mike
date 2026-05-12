@@ -8,8 +8,6 @@ import type {
 } from "./types";
 import { toClaudeTools } from "./tools";
 
-const DEBUG_LLM_STREAM = process.env.DEBUG_LLM_STREAM === "true";
-
 type ContentBlock =
     | { type: "text"; text: string }
     | { type: "tool_use"; id: string; name: string; input: unknown }
@@ -74,12 +72,6 @@ export async function streamClaude(
         });
 
         let sawThinking = false;
-
-        stream.on("streamEvent", (event) => {
-            if (DEBUG_LLM_STREAM) {
-                console.debug("[claude raw stream]", JSON.stringify(event));
-            }
-        });
 
         stream.on("text", (delta) => {
             callbacks.onContentDelta?.(delta);

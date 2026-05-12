@@ -95,7 +95,7 @@ services:
       PGDATABASE: ${POSTGRES_DB}
     volumes:
       - ./docker/init-db.sh:/init-db.sh:ro
-      - ./backend/migrations:/migrations:ro
+      - ./backend/schema.sql:/schema.sql:ro
     entrypoint: ["/bin/sh", "/init-db.sh"]
     restart: "no"
 

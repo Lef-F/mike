@@ -31,7 +31,6 @@ import { RenameableTitle } from "../shared/RenameableTitle";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
-    apiKeysFromProfile,
     getModelProvider,
     isModelAvailable,
     type ModelProvider,
@@ -88,7 +87,7 @@ export function TRView({ reviewId, projectId }: Props) {
     const tableRef = useRef<TRTableHandle>(null);
     const router = useRouter();
     const { profile } = useUserProfile();
-    const apiKeys = apiKeysFromProfile(profile);
+    const apiKeys = profile?.apiKeys;
     const tabularModel = profile?.tabularModel ?? "gemini-3-flash-preview";
 
     useEffect(() => {
@@ -241,7 +240,7 @@ export function TRView({ reviewId, projectId }: Props) {
         // If columns changed since last save, update the review first
         if (columns.length === 0) return;
 
-        if (!isModelAvailable(tabularModel, apiKeys)) {
+        if (apiKeys && !isModelAvailable(tabularModel, apiKeys)) {
             setApiKeyModalProvider(getModelProvider(tabularModel));
             return;
         }
