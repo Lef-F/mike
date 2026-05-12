@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Smoke test: boot the default mode, hit Caddy, tear down.
+# Smoke test: boot the DEFAULT mode (MIKE_SUPABASE_MODE=bundled-full +
+# MIKE_STORAGE_MODE=bundled), hit Caddy + /backend/health, tear down.
 # Run from repo root. Requires docker, docker compose, curl.
+# Other mode combinations (bundled-byo-db, external) need manual
+# verification — they each need real external services configured.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
