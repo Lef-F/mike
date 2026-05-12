@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 /**
  * Extract and validate user from Supabase JWT token
  * Returns user info if valid, null if invalid or missing
- *
+ * 
  * @param request NextRequest with Authorization header
  * @returns User object with email and id, or null
  */
@@ -13,17 +13,17 @@ export async function getUserFromRequest(request: NextRequest): Promise<{
 } | null> {
   try {
     const authHeader = request.headers.get('Authorization');
-
+    
     if (!authHeader?.startsWith('Bearer ')) {
       return null;
     }
 
     const token = authHeader.substring(7);
-
+    
     if (!token) {
       return null;
     }
-
+    
     // Validate with Supabase
     const { createClient } = await import('@supabase/supabase-js');
     const supabase = createClient(
@@ -32,7 +32,7 @@ export async function getUserFromRequest(request: NextRequest): Promise<{
     );
 
     const { data: { user }, error } = await supabase.auth.getUser(token);
-
+    
     if (error || !user) {
       return null;
     }
@@ -49,3 +49,4 @@ export async function getUserFromRequest(request: NextRequest): Promise<{
     return null;
   }
 }
+

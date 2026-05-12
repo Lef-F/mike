@@ -10,18 +10,14 @@ import { downloadFile, uploadFile, storageKey } from "../lib/storage";
 import { docxToPdf, convertedPdfKey } from "../lib/convert";
 import { checkProjectAccess } from "../lib/access";
 import { singleFileUpload } from "../lib/upload";
-import { handleDocumentUpload } from "./documents";
 
 export const projectsRouter = Router();
+const ALLOWED_TYPES = new Set(["pdf", "docx", "doc"]);
 
 // GET /projects
 projectsRouter.get("/", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  // Stored shared_with values are normalised to lowercase on PATCH/POST,
-  // so the lookup must lowercase the JWT email too — Google/Microsoft/etc.
-  // can issue tokens with mixed-case emails and a mismatch silently makes
-  // the row invisible.
-  const userEmail = (res.locals.userEmail as string | undefined)?.toLowerCase();
+  const userEmail = res.locals.userEmail as string;
   const db = createServerSupabase();
 
   const { data: ownProjects, error: ownError } = await db
@@ -35,7 +31,7 @@ projectsRouter.get("/", requireAuth, async (req, res) => {
     ? await db
         .from("projects")
         .select("*")
-        .contains("shared_with", JSON.stringify([userEmail]))
+        .filter("shared_with", "cs", JSON.stringify([userEmail]))
         .neq("user_id", userId)
         .order("created_at", { ascending: false })
     : { data: [], error: null };
@@ -104,7 +100,7 @@ projectsRouter.post("/", requireAuth, async (req, res) => {
 // GET /projects/:projectId
 projectsRouter.get("/:projectId", requireAuth, async (req, res) => {
   const userId = res.locals.userId as string;
-  const userEmail = (res.locals.userEmail as string | undefined)?.toLowerCase();
+  const userEmail = res.locals.userEmail as string;
   const { projectId } = req.params;
   const db = createServerSupabase();
 
@@ -610,4 +606,221 @@ async function loadProjectFolder(
     .eq("project_id", projectId)
     .maybeSingle();
   return (data as { id: string; parent_folder_id: string | null } | null) ?? null;
+}
+
+export async function handleDocumentUpload(
+  req: import("express").Request,
+  res: import("express").Response,
+  userId: string,
+  projectId: string | null,
+  db: ReturnType<typeof createServerSupabase>,
+) {
+  const file = req.file;
+  if (!file) return void res.status(400).json({ detail: "file is required" });
+
+  const filename = file.originalname;
+  const suffix = filename.includes(".")
+    ? filename.split(".").pop()!.toLowerCase()
+    : "";
+  if (!ALLOWED_TYPES.has(suffix))
+    return void res
+      .status(400)
+      .json({
+        detail: `Unsupported file type: ${suffix}. Allowed: pdf, docx, doc`,
+      });
+
+  const content = file.buffer;
+  const { data: doc, error: insertErr } = await db
+    .from("documents")
+    .insert({
+      project_id: projectId,
+      user_id: userId,
+      filename,
+      file_type: suffix,
+      size_bytes: content.byteLength,
+      status: "processing",
+    })
+    .select("*")
+    .single();
+
+  if (insertErr || !doc)
+    return void res
+      .status(500)
+      .json({ detail: "Failed to create document record" });
+
+  try {
+    const docId = doc.id as string;
+    const key = storageKey(userId, docId, filename);
+    const contentType =
+      suffix === "pdf"
+        ? "application/pdf"
+        : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    await uploadFile(
+      key,
+      content.buffer.slice(
+        content.byteOffset,
+        content.byteOffset + content.byteLength,
+      ) as ArrayBuffer,
+      contentType,
+    );
+
+    const rawBuf = content.buffer.slice(
+      content.byteOffset,
+      content.byteOffset + content.byteLength,
+    ) as ArrayBuffer;
+    const tree = await extractStructureTree(rawBuf, suffix, filename);
+    const pageCount = suffix === "pdf" ? await countPdfPages(rawBuf) : null;
+
+    // Convert DOCX/DOC → PDF for display. PDFs are their own rendition.
+    let pdfStoragePath: string | null = null;
+    if (suffix === "docx" || suffix === "doc") {
+      try {
+        const pdfBuf = await docxToPdf(content);
+        const pdfKey = convertedPdfKey(userId, docId);
+        await uploadFile(
+          pdfKey,
+          pdfBuf.buffer.slice(
+            pdfBuf.byteOffset,
+            pdfBuf.byteOffset + pdfBuf.byteLength,
+          ) as ArrayBuffer,
+          "application/pdf",
+        );
+        pdfStoragePath = pdfKey;
+      } catch (err) {
+        console.error(
+          `[upload] DOCX→PDF conversion failed for ${filename}:`,
+          err,
+        );
+      }
+    } else if (suffix === "pdf") {
+      pdfStoragePath = key;
+    }
+
+    // Storage paths live on document_versions — create the V1 row and
+    // point documents.current_version_id at it.
+    const { data: versionRow, error: verErr } = await db
+      .from("document_versions")
+      .insert({
+        document_id: docId,
+        storage_path: key,
+        pdf_storage_path: pdfStoragePath,
+        source: "upload",
+        version_number: 1,
+        display_name: filename,
+      })
+      .select("id")
+      .single();
+    if (verErr || !versionRow) {
+      throw new Error(
+        `Failed to record upload version: ${verErr?.message ?? "unknown"}`,
+      );
+    }
+
+    await db
+      .from("documents")
+      .update({
+        current_version_id: versionRow.id,
+        size_bytes: content.byteLength,
+        page_count: pageCount,
+        structure_tree: tree ?? null,
+        status: "ready",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", docId);
+
+    const { data: updated } = await db
+      .from("documents")
+      .select("*")
+      .eq("id", docId)
+      .single();
+    const responseDoc = updated
+      ? {
+            ...updated,
+            storage_path: key,
+            pdf_storage_path: pdfStoragePath,
+        }
+      : updated;
+    return void res.status(201).json(responseDoc);
+  } catch (e) {
+    await db.from("documents").update({ status: "error" }).eq("id", doc.id);
+    return void res
+      .status(500)
+      .json({ detail: `Document processing failed: ${String(e)}` });
+  }
+}
+
+async function countPdfPages(buf: ArrayBuffer): Promise<number | null> {
+  try {
+    const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs" as string);
+    const pdf = await (
+      pdfjsLib as unknown as {
+        getDocument: (opts: unknown) => {
+          promise: Promise<{ numPages: number }>;
+        };
+      }
+    ).getDocument({ data: new Uint8Array(buf) }).promise;
+    return pdf.numPages;
+  } catch {
+    return null;
+  }
+}
+
+async function extractStructureTree(
+  content: ArrayBuffer,
+  fileType: string,
+  filename: string,
+): Promise<unknown[] | null> {
+  try {
+    if (fileType === "pdf") {
+      const pdfjsLib = await import(
+        "pdfjs-dist/legacy/build/pdf.mjs" as string
+      );
+      const pdf = await (
+        pdfjsLib as unknown as {
+          getDocument: (opts: unknown) => {
+            promise: Promise<{
+              numPages: number;
+              getOutline: () => Promise<{ title?: string }[]>;
+            }>;
+          };
+        }
+      ).getDocument({ data: new Uint8Array(content) }).promise;
+      if (pdf.numPages <= 5) return null;
+      const outline = await pdf.getOutline();
+      if (outline?.length) {
+        return outline.map((item, i) => ({
+          id: `h1-${i}`,
+          title: item.title ?? `Item ${i + 1}`,
+          level: 1,
+          page_number: null,
+          children: [],
+        }));
+      }
+      return Array.from({ length: pdf.numPages }, (_, i) => ({
+        id: `page-${i + 1}`,
+        title: `Page ${i + 1}`,
+        level: 1,
+        page_number: i + 1,
+        children: [],
+      }));
+    } else {
+      const mammoth = await import("mammoth");
+      const result = await mammoth.extractRawText({
+        buffer: Buffer.from(content),
+      });
+      const lines = result.value.split("\n").filter((l) => l.trim());
+      const nodes = lines
+        .slice(0, 30)
+        .map((line, i) => ({
+          id: `h1-${i}`,
+          title: line.slice(0, 100),
+          level: 1,
+          page_number: null,
+          children: [],
+        }));
+      return nodes.length ? nodes : null;
+    }
+  } catch {
+    return null;
+  }
 }

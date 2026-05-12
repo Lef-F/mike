@@ -9,6 +9,7 @@ import Link from "next/link";
 import { SiteLogo } from "@/components/site-logo";
 import { CheckCircle2 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { updateUserProfile } from "@/app/lib/mikeApi";
 
 export default function SignupPage() {
     const router = useRouter();
@@ -59,20 +60,17 @@ export default function SignupPage() {
                 const trimmedName = name.trim();
                 const trimmedOrg = organisation.trim();
                 if (trimmedName || trimmedOrg) {
-                    const apiBase =
-                        process.env.NEXT_PUBLIC_API_BASE_URL ??
-                        "http://localhost:3001";
-                    await fetch(`${apiBase}/user/profile`, {
-                        method: "PATCH",
-                        headers: {
-                            "Content-Type": "application/json",
-                            Authorization: `Bearer ${data.session.access_token}`,
-                        },
-                        body: JSON.stringify({
-                            ...(trimmedName && { display_name: trimmedName }),
+                    try {
+                        await updateUserProfile({
+                            ...(trimmedName && { displayName: trimmedName }),
                             ...(trimmedOrg && { organisation: trimmedOrg }),
-                        }),
-                    }).catch(() => {});
+                        });
+                    } catch (profileError) {
+                        console.error(
+                            "[signup] failed to persist profile fields",
+                            profileError,
+                        );
+                    }
                 }
             }
             setSuccess(true);
@@ -121,7 +119,7 @@ export default function SignupPage() {
                 <SiteLogo size="md" className="md:text-4xl" asLink />
             </div>
             <div className="w-full max-w-md">
-                <div className="bg-white border border-gray-200 rounded-2xl p-8">
+                <div className="bg-white border border-gray-200 rounded-2xl p-8 mb-4">
                     <div className="flex justify-between items-center mb-6">
                         <h2 className="text-left text-2xl font-serif">
                             Create Account
@@ -275,6 +273,12 @@ export default function SignupPage() {
                         </Link>
                     </div>
                 </div>
+                <p className="text-center text-xs text-gray-500 leading-relaxed px-2">
+                    Mike hosted on MikeOSS.com is currently a demo service.
+                    Please do not upload, submit, or store sensitive,
+                    confidential, privileged, client, or personally identifiable
+                    documents.
+                </p>
             </div>
         </div>
     );

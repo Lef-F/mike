@@ -100,16 +100,12 @@ export async function ensureReviewAccess(
     userId: string,
     userEmail: string | null | undefined,
     db: Db,
-): Promise<
-    | { ok: true; isOwner: boolean; via: "owner" | "project" | "direct" }
-    | { ok: false }
-> {
-    if (review.user_id === userId)
-        return { ok: true, isOwner: true, via: "owner" };
+): Promise<{ ok: true; isOwner: boolean } | { ok: false }> {
+    if (review.user_id === userId) return { ok: true, isOwner: true };
     const email = (userEmail ?? "").toLowerCase();
-    if (!review.project_id && email && Array.isArray(review.shared_with)) {
+    if (email && Array.isArray(review.shared_with)) {
         if (review.shared_with.some((e) => (e ?? "").toLowerCase() === email)) {
-            return { ok: true, isOwner: false, via: "direct" };
+            return { ok: true, isOwner: false };
         }
     }
     if (!review.project_id) return { ok: false };
@@ -119,14 +115,50 @@ export async function ensureReviewAccess(
         userEmail,
         db,
     );
-    if (access.ok) return { ok: true, isOwner: false, via: "project" };
+    if (access.ok) return { ok: true, isOwner: false };
     return { ok: false };
 }
 
-export function canEditReview(
-    access: { ok: true; isOwner: boolean; via?: "owner" | "project" | "direct" },
-): boolean {
-    return access.isOwner || access.via === "project";
+/**
+ * Filter user-supplied document IDs down to documents the caller can read.
+ *
+ * Tabular review routes accept document IDs from request bodies. Without this
+ * check, a caller with access to any review could attach arbitrary document
+ * UUIDs and later cause /generate or /regenerate-cell to extract those bytes.
+ */
+export async function filterAccessibleDocumentIds(
+    documentIds: string[],
+    userId: string,
+    userEmail: string | null | undefined,
+    db: Db,
+): Promise<string[]> {
+    if (documentIds.length === 0) return [];
+    const { data: docs } = await db
+        .from("documents")
+        .select("id, user_id, project_id")
+        .in("id", documentIds);
+    const rows = (docs ?? []) as {
+        id: string;
+        user_id: string;
+        project_id: string | null;
+    }[];
+    if (rows.length === 0) return [];
+
+    const accessibleProjectIds = new Set(
+        await listAccessibleProjectIds(userId, userEmail, db),
+    );
+    const allowed: string[] = [];
+    for (const doc of rows) {
+        if (doc.user_id === userId) {
+            allowed.push(doc.id);
+        } else if (
+            doc.project_id &&
+            accessibleProjectIds.has(doc.project_id)
+        ) {
+            allowed.push(doc.id);
+        }
+    }
+    return allowed;
 }
 
 /**
@@ -139,16 +171,13 @@ export async function listAccessibleProjectIds(
     userEmail: string | null | undefined,
     db: Db,
 ): Promise<string[]> {
-    // Stored shared_with values are lowercase; lowercase the JWT email too
-    // so providers that issue mixed-case email claims still match the row.
-    const email = userEmail?.toLowerCase();
     const [{ data: own }, { data: shared }] = await Promise.all([
         db.from("projects").select("id").eq("user_id", userId),
-        email
+        userEmail
             ? db
                   .from("projects")
                   .select("id")
-                  .contains("shared_with", JSON.stringify([email]))
+                  .filter("shared_with", "cs", JSON.stringify([userEmail]))
                   .neq("user_id", userId)
             : Promise.resolve({ data: [] as { id: string }[] }),
     ]);

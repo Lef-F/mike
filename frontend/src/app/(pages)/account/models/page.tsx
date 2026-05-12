@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AlertCircle, Check, ChevronDown, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,12 +13,31 @@ import {
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useUserProfile } from "@/contexts/UserProfileContext";
+import type { ApiKeyState } from "@/app/lib/mikeApi";
 import { MODELS } from "@/app/components/assistant/ModelToggle";
 import {
-    apiKeysFromProfile,
     isModelAvailable,
     modelGroupToProvider,
+    providerLabel,
 } from "@/app/lib/modelAvailability";
+
+const API_KEY_FIELDS = [
+    {
+        provider: "claude",
+        label: "Anthropic (Claude) API Key",
+        placeholder: "sk-ant-…",
+    },
+    {
+        provider: "gemini",
+        label: "Google (Gemini) API Key",
+        placeholder: "AI…",
+    },
+    {
+        provider: "openai",
+        label: "OpenAI API Key",
+        placeholder: "sk-…",
+    },
+] as const;
 
 export default function ModelsAndApiKeysPage() {
     const { profile, updateModelPreference, updateApiKey } = useUserProfile();
@@ -37,12 +56,16 @@ export default function ModelsAndApiKeysPage() {
                         <label className="text-sm text-gray-600 block mb-2">
                             Tabular review model
                         </label>
+                        <p className="text-xs text-gray-400 mb-2">
+                            We recommend using a smaller model for tabular
+                            reviews to reduce token costs.
+                        </p>
                         <TabularModelDropdown
                             value={
                                 profile?.tabularModel ??
                                 "gemini-3-flash-preview"
                             }
-                            apiKeys={apiKeysFromProfile(profile)}
+                            apiKeys={profile?.apiKeys}
                             onChange={(id) =>
                                 updateModelPreference("tabularModel", id)
                             }
@@ -64,35 +87,33 @@ export default function ModelsAndApiKeysPage() {
                     own instance of Mike.
                 </p>
                 <p className="text-xs text-gray-400 mb-4 max-w-xl">
-                    Title generation automatically routes to the cheapest model
-                    of whichever provider you&rsquo;ve configured (Gemini Flash
-                    Lite if a Gemini key is set, otherwise Claude Haiku).
+                    Title generation automatically routes to the cheapest
+                    configured provider model.
                 </p>
                 <div className="space-y-4 max-w-xl">
-                    <ApiKeyField
-                        label="Anthropic (Claude) API Key"
-                        placeholder="sk-ant-…"
-                        hasKey={!!profile?.hasClaudeApiKey}
-                        onSave={(value) =>
-                            updateApiKey("claude", value?.trim() || null)
-                        }
-                    />
-                    <ApiKeyField
-                        label="Google (Gemini) API Key"
-                        placeholder="AI…"
-                        hasKey={!!profile?.hasGeminiApiKey}
-                        onSave={(value) =>
-                            updateApiKey("gemini", value?.trim() || null)
-                        }
-                    />
-                    <ApiKeyField
-                        label="OpenRouter API Key"
-                        placeholder="sk-or-…"
-                        hasKey={!!profile?.hasOpenrouterApiKey}
-                        onSave={(value) =>
-                            updateApiKey("openrouter", value?.trim() || null)
-                        }
-                    />
+                    {API_KEY_FIELDS.map((field) => (
+                        <ApiKeyField
+                            key={field.provider}
+                            label={field.label}
+                            placeholder={field.placeholder}
+                            hasSavedKey={
+                                !!profile?.apiKeys[field.provider].configured
+                            }
+                            isServerConfigured={
+                                profile?.apiKeys[field.provider].source ===
+                                "env"
+                            }
+                            onSave={(value) =>
+                                updateApiKey(
+                                    field.provider,
+                                    value.trim() || null,
+                                )
+                            }
+                            onRemove={() =>
+                                updateApiKey(field.provider, null)
+                            }
+                        />
+                    ))}
                 </div>
             </div>
         </div>
@@ -106,12 +127,16 @@ function TabularModelDropdown({
 }: {
     value: string;
     onChange: (id: string) => void;
-    apiKeys: { claudeApiKey: string | null; geminiApiKey: string | null; openrouterApiKey: string | null };
+    apiKeys?: ApiKeyState;
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const selected = MODELS.find((m) => m.id === value);
-    const selectedAvailable = isModelAvailable(value, apiKeys);
-    const groups: ("Anthropic" | "Google" | "OpenRouter")[] = ["Anthropic", "Google", "OpenRouter"];
+    const selectedAvailable = apiKeys ? isModelAvailable(value, apiKeys) : true;
+    const groups: ("Anthropic" | "Google" | "OpenAI")[] = [
+        "Anthropic",
+        "Google",
+        "OpenAI",
+    ];
 
     return (
         <DropdownMenu onOpenChange={setIsOpen}>
@@ -149,10 +174,9 @@ function TabularModelDropdown({
                             </DropdownMenuLabel>
                             {items.map((m) => {
                                 const provider = modelGroupToProvider(m.group);
-                                const available = isModelAvailable(
-                                    m.id,
-                                    apiKeys,
-                                );
+                                const available = apiKeys
+                                    ? isModelAvailable(m.id, apiKeys)
+                                    : true;
                                 return (
                                     <DropdownMenuItem
                                         key={m.id}
@@ -160,7 +184,7 @@ function TabularModelDropdown({
                                         onSelect={() => onChange(m.id)}
                                         title={
                                             !available
-                                                ? `Add a ${provider === "claude" ? "Claude" : provider === "gemini" ? "Gemini" : "OpenRouter"} API key to use this model`
+                                                ? `Add a ${providerLabel(provider)} API key to use this model`
                                                 : undefined
                                         }
                                     >
@@ -189,18 +213,26 @@ function TabularModelDropdown({
 function ApiKeyField({
     label,
     placeholder,
-    hasKey,
+    hasSavedKey,
+    isServerConfigured,
     onSave,
+    onRemove,
 }: {
     label: string;
     placeholder: string;
-    hasKey: boolean;
-    onSave: (value: string | null) => Promise<boolean>;
+    hasSavedKey: boolean;
+    isServerConfigured: boolean;
+    onSave: (value: string) => Promise<boolean>;
+    onRemove: () => Promise<boolean>;
 }) {
     const [value, setValue] = useState("");
     const [reveal, setReveal] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [saved, setSaved] = useState(false);
+
+    useEffect(() => {
+        setValue("");
+    }, [hasSavedKey]);
 
     const dirty = value.trim().length > 0;
 
@@ -217,20 +249,34 @@ function ApiKeyField({
         }
     };
 
-    const handleClear = async () => {
+    const handleRemove = async () => {
         setIsSaving(true);
-        const ok = await onSave(null);
+        const ok = await onRemove();
         setIsSaving(false);
-        if (!ok) {
-            alert(`Failed to clear ${label}.`);
-        } else {
-            setValue("");
-        }
+        if (!ok) alert(`Failed to remove ${label}.`);
     };
 
     return (
         <div>
             <label className="text-sm text-gray-600 block mb-2">{label}</label>
+            {isServerConfigured && (
+                <div className="mb-2 rounded-md border border-blue-100 bg-blue-50 px-3 py-2">
+                    <p className="text-xs text-blue-800">
+                        A server .env key is configured for this provider.
+                        Browser API-key edits are disabled.
+                    </p>
+                    {hasSavedKey && (
+                        <p className="mt-1 text-xs text-blue-800">
+                            The server key will be used for this provider.
+                        </p>
+                    )}
+                </div>
+            )}
+            {hasSavedKey && !isServerConfigured && (
+                <p className="text-xs text-gray-500 mb-2">
+                    A key is saved. Paste a new key to replace it.
+                </p>
+            )}
             <div className="flex gap-2">
                 <div className="relative flex-1">
                     <Input
@@ -238,18 +284,22 @@ function ApiKeyField({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         placeholder={
-                            hasKey
-                                ? "Configured - enter a new key to replace"
-                                : placeholder
+                            isServerConfigured
+                                ? "Server .env key configured"
+                                : hasSavedKey
+                                  ? "Saved key hidden"
+                                  : placeholder
                         }
                         className="pr-10"
                         autoComplete="off"
                         spellCheck={false}
+                        disabled={isServerConfigured}
                     />
                     <button
                         type="button"
                         onClick={() => setReveal((r) => !r)}
-                        className="absolute inset-y-0 right-2 flex items-center text-gray-400 hover:text-gray-600"
+                        disabled={isServerConfigured}
+                        className="absolute inset-y-0 right-2 flex items-center text-gray-400 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-40"
                         aria-label={reveal ? "Hide key" : "Show key"}
                     >
                         {reveal ? (
@@ -261,7 +311,7 @@ function ApiKeyField({
                 </div>
                 <Button
                     onClick={handleSave}
-                    disabled={isSaving || !dirty || saved}
+                    disabled={isServerConfigured || isSaving || !dirty || saved}
                     className="min-w-[80px] transition-all bg-black hover:bg-gray-900 text-white"
                 >
                     {isSaving ? (
@@ -275,14 +325,14 @@ function ApiKeyField({
                         "Save"
                     )}
                 </Button>
-                {hasKey && !dirty && (
+                {hasSavedKey && !isServerConfigured && (
                     <Button
                         type="button"
                         variant="outline"
-                        onClick={handleClear}
+                        onClick={handleRemove}
                         disabled={isSaving}
                     >
-                        Clear
+                        Remove
                     </Button>
                 )}
             </div>
