@@ -33,6 +33,7 @@ import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
 import { PreResponseWrapper } from "../shared/PreResponseWrapper";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
+    apiKeysFromProfile,
     getModelProvider,
     isModelAvailable,
     type ModelProvider,
@@ -186,16 +187,26 @@ function TRResponseStatus({ isActive }: { isActive: boolean }) {
     const wasActiveRef = useRef(false);
 
     useEffect(() => {
+        let hideTimer: ReturnType<typeof setTimeout> | null = null;
         if (wasActiveRef.current && !isActive) {
-            setShowDone(true);
-            setDoneVisible(true);
-            const t = setTimeout(() => setDoneVisible(false), 1500);
+            const showTimer = setTimeout(() => {
+                setShowDone(true);
+                setDoneVisible(true);
+                hideTimer = setTimeout(() => setDoneVisible(false), 1500);
+            }, 0);
             wasActiveRef.current = isActive;
-            return () => clearTimeout(t);
+            return () => {
+                clearTimeout(showTimer);
+                if (hideTimer) clearTimeout(hideTimer);
+            };
         }
         if (!wasActiveRef.current && isActive) {
-            setShowDone(false);
-            setDoneVisible(false);
+            const resetTimer = setTimeout(() => {
+                setShowDone(false);
+                setDoneVisible(false);
+            }, 0);
+            wasActiveRef.current = isActive;
+            return () => clearTimeout(resetTimer);
         }
         wasActiveRef.current = isActive;
     }, [isActive]);
@@ -453,7 +464,7 @@ function TRChatInput({
     onCancel: () => void;
     model: string;
     onModelChange: (id: string) => void;
-    apiKeys: { claudeApiKey: string | null; geminiApiKey: string | null };
+    apiKeys: { claudeApiKey: string | null; geminiApiKey: string | null; openrouterApiKey: string | null };
 }) {
     const [value, setValue] = useState("");
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -607,10 +618,7 @@ export function TRChatPanel({
     onChatIdChange,
 }: Props) {
     const { profile, updateModelPreference } = useUserProfile();
-    const apiKeys = {
-        claudeApiKey: profile?.claudeApiKey ?? null,
-        geminiApiKey: profile?.geminiApiKey ?? null,
-    };
+    const apiKeys = apiKeysFromProfile(profile);
     const currentModel = profile?.tabularModel ?? "gemini-3-flash-preview";
     const [apiKeyModalProvider, setApiKeyModalProvider] =
         useState<ModelProvider | null>(null);

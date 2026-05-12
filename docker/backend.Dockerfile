@@ -3,7 +3,7 @@
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 COPY backend/package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 COPY backend/ ./
 RUN npm run build
 

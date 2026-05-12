@@ -76,6 +76,8 @@ ensure_random_hex AUTHENTICATOR_PASSWORD 24
 ensure_random_hex GARAGE_RPC_SECRET     32
 ensure_random_hex GARAGE_ADMIN_TOKEN    32
 ensure_random_hex JWT_SECRET            32
+ensure_random_hex DOWNLOAD_SIGNING_SECRET 32
+ensure_random_hex USER_API_KEYS_ENCRYPTION_KEY 32
 
 # JWTs depend on JWT_SECRET; regenerate them whenever JWT_SECRET changed
 # (i.e. when the user runs --force) or when they're empty.

@@ -21,10 +21,12 @@ import { AddDocButton } from "./AddDocButton";
 import { AddDocumentsModal } from "../shared/AddDocumentsModal";
 import { AssistantWorkflowModal } from "./AssistantWorkflowModal";
 import { ApiKeyMissingModal } from "../shared/ApiKeyMissingModal";
+import { McpToggleButton } from "./McpToggleButton";
 import { ModelToggle } from "./ModelToggle";
 import { useSelectedModel } from "@/app/hooks/useSelectedModel";
 import { useUserProfile } from "@/contexts/UserProfileContext";
 import {
+    apiKeysFromProfile,
     getModelProvider,
     isModelAvailable,
     type ModelProvider,
@@ -67,10 +69,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
     } | null>(null);
     const [model, setModel] = useSelectedModel();
     const { profile } = useUserProfile();
-    const apiKeys = {
-        claudeApiKey: profile?.claudeApiKey ?? null,
-        geminiApiKey: profile?.geminiApiKey ?? null,
-    };
+    const apiKeys = apiKeysFromProfile(profile);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [docSelectorOpen, setDocSelectorOpen] = useState(false);
     const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
@@ -271,6 +270,7 @@ export const ChatInput = forwardRef<ChatInputHandle, Props>(function ChatInput(
                                     </span>
                                 </button>
                             )}
+                            <McpToggleButton />
                         </div>
 
                         <div className="flex items-center gap-1">

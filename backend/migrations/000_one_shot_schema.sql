@@ -20,6 +20,7 @@ create table if not exists public.user_profiles (
   tabular_model text not null default 'gemini-3-flash-preview',
   claude_api_key text,
   gemini_api_key text,
+  openrouter_api_key text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -30,14 +31,7 @@ create index if not exists idx_user_profiles_user
 alter table public.user_profiles enable row level security;
 
 drop policy if exists "Users can view their own profile" on public.user_profiles;
-create policy "Users can view their own profile"
-  on public.user_profiles for select
-  using (auth.uid() = user_id);
-
 drop policy if exists "Users can update their own profile" on public.user_profiles;
-create policy "Users can update their own profile"
-  on public.user_profiles for update
-  using (auth.uid() = user_id);
 
 create or replace function public.handle_new_user()
 returns trigger
@@ -81,6 +75,36 @@ create index if not exists idx_projects_user
 
 create index if not exists projects_shared_with_idx
   on public.projects using gin (shared_with);
+
+alter table public.projects enable row level security;
+
+drop policy if exists projects_select_owner_or_shared on public.projects;
+create policy projects_select_owner_or_shared
+  on public.projects for select
+  using (
+    user_id = auth.uid()::text
+    or exists (
+      select 1
+      from jsonb_array_elements_text(coalesce(shared_with, '[]'::jsonb)) as member(email)
+      where lower(member.email) = lower(coalesce(auth.jwt()->>'email', ''))
+    )
+  );
+
+drop policy if exists projects_insert_owner_only on public.projects;
+create policy projects_insert_owner_only
+  on public.projects for insert
+  with check (user_id = auth.uid()::text);
+
+drop policy if exists projects_update_owner_only on public.projects;
+create policy projects_update_owner_only
+  on public.projects for update
+  using (user_id = auth.uid()::text)
+  with check (user_id = auth.uid()::text);
+
+drop policy if exists projects_delete_owner_only on public.projects;
+create policy projects_delete_owner_only
+  on public.projects for delete
+  using (user_id = auth.uid()::text);
 
 create table if not exists public.project_subfolders (
   id uuid primary key default gen_random_uuid(),
@@ -242,6 +266,65 @@ create index if not exists idx_chats_user
 create index if not exists idx_chats_project
   on public.chats(project_id);
 
+alter table public.chats enable row level security;
+
+drop policy if exists chats_select_owner_or_project_member on public.chats;
+create policy chats_select_owner_or_project_member
+  on public.chats for select
+  using (
+    user_id = auth.uid()::text
+    or (
+      project_id is not null
+      and exists (
+        select 1
+        from public.projects p
+        where p.id = chats.project_id
+          and (
+            p.user_id = auth.uid()::text
+            or exists (
+              select 1
+              from jsonb_array_elements_text(coalesce(p.shared_with, '[]'::jsonb)) as member(email)
+              where lower(member.email) = lower(coalesce(auth.jwt()->>'email', ''))
+            )
+          )
+      )
+    )
+  );
+
+drop policy if exists chats_insert_user_and_project_access on public.chats;
+create policy chats_insert_user_and_project_access
+  on public.chats for insert
+  with check (
+    user_id = auth.uid()::text
+    and (
+      project_id is null
+      or exists (
+        select 1
+        from public.projects p
+        where p.id = chats.project_id
+          and (
+            p.user_id = auth.uid()::text
+            or exists (
+              select 1
+              from jsonb_array_elements_text(coalesce(p.shared_with, '[]'::jsonb)) as member(email)
+              where lower(member.email) = lower(coalesce(auth.jwt()->>'email', ''))
+            )
+          )
+      )
+    )
+  );
+
+drop policy if exists chats_update_owner_only on public.chats;
+create policy chats_update_owner_only
+  on public.chats for update
+  using (user_id = auth.uid()::text)
+  with check (user_id = auth.uid()::text);
+
+drop policy if exists chats_delete_owner_only on public.chats;
+create policy chats_delete_owner_only
+  on public.chats for delete
+  using (user_id = auth.uid()::text);
+
 create table if not exists public.chat_messages (
   id uuid primary key default gen_random_uuid(),
   chat_id uuid not null references public.chats(id) on delete cascade,
@@ -254,6 +337,68 @@ create table if not exists public.chat_messages (
 
 create index if not exists idx_chat_messages_chat
   on public.chat_messages(chat_id);
+
+alter table public.chat_messages enable row level security;
+
+drop policy if exists chat_messages_select_by_chat_access on public.chat_messages;
+create policy chat_messages_select_by_chat_access
+  on public.chat_messages for select
+  using (
+    exists (
+      select 1
+      from public.chats c
+      where c.id = chat_messages.chat_id
+        and (
+          c.user_id = auth.uid()::text
+          or (
+            c.project_id is not null
+            and exists (
+              select 1
+              from public.projects p
+              where p.id = c.project_id
+                and (
+                  p.user_id = auth.uid()::text
+                  or exists (
+                    select 1
+                    from jsonb_array_elements_text(coalesce(p.shared_with, '[]'::jsonb)) as member(email)
+                    where lower(member.email) = lower(coalesce(auth.jwt()->>'email', ''))
+                  )
+                )
+            )
+          )
+        )
+    )
+  );
+
+drop policy if exists chat_messages_insert_by_chat_access on public.chat_messages;
+create policy chat_messages_insert_by_chat_access
+  on public.chat_messages for insert
+  with check (
+    exists (
+      select 1
+      from public.chats c
+      where c.id = chat_messages.chat_id
+        and (
+          c.user_id = auth.uid()::text
+          or (
+            c.project_id is not null
+            and exists (
+              select 1
+              from public.projects p
+              where p.id = c.project_id
+                and (
+                  p.user_id = auth.uid()::text
+                  or exists (
+                    select 1
+                    from jsonb_array_elements_text(coalesce(p.shared_with, '[]'::jsonb)) as member(email)
+                    where lower(member.email) = lower(coalesce(auth.jwt()->>'email', ''))
+                  )
+                )
+            )
+          )
+        )
+    )
+  );
 
 do $$
 begin
@@ -271,6 +416,56 @@ begin
   end if;
 end;
 $$;
+
+-- ---------------------------------------------------------------------------
+-- User MCP servers
+-- ---------------------------------------------------------------------------
+
+create table if not exists public.user_mcp_servers (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  slug text not null,
+  name text not null,
+  url text not null,
+  headers jsonb not null default '{}'::jsonb,
+  enabled boolean not null default true,
+  last_error text,
+  auth_type text not null default 'headers'
+    check (auth_type in ('headers', 'oauth')),
+  oauth_metadata jsonb,
+  oauth_tokens jsonb,
+  oauth_code_verifier text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint user_mcp_servers_slug_format
+    check (slug ~ '^[a-z0-9_-]{1,24}$'),
+  unique (user_id, slug)
+);
+
+create index if not exists idx_user_mcp_servers_user
+  on public.user_mcp_servers(user_id, enabled);
+
+alter table public.user_mcp_servers enable row level security;
+
+drop policy if exists "Users can view their own MCP servers" on public.user_mcp_servers;
+create policy "Users can view their own MCP servers"
+  on public.user_mcp_servers for select
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can insert their own MCP servers" on public.user_mcp_servers;
+create policy "Users can insert their own MCP servers"
+  on public.user_mcp_servers for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "Users can update their own MCP servers" on public.user_mcp_servers;
+create policy "Users can update their own MCP servers"
+  on public.user_mcp_servers for update
+  using (auth.uid() = user_id);
+
+drop policy if exists "Users can delete their own MCP servers" on public.user_mcp_servers;
+create policy "Users can delete their own MCP servers"
+  on public.user_mcp_servers for delete
+  using (auth.uid() = user_id);
 
 -- ---------------------------------------------------------------------------
 -- Tabular reviews
@@ -338,3 +533,45 @@ create table if not exists public.tabular_review_chat_messages (
 
 create index if not exists tabular_review_chat_messages_chat_idx
   on public.tabular_review_chat_messages(chat_id, created_at);
+
+-- ---------------------------------------------------------------------------
+-- Security posture
+-- ---------------------------------------------------------------------------
+-- App data is accessed through backend service-role routes. Keep RLS enabled
+-- without direct anon/authenticated policies so browser clients cannot read or
+-- write raw tables such as user profiles, document metadata, or API keys.
+
+alter table public.user_profiles enable row level security;
+alter table public.projects enable row level security;
+alter table public.project_subfolders enable row level security;
+alter table public.documents enable row level security;
+alter table public.document_versions enable row level security;
+alter table public.document_edits enable row level security;
+alter table public.workflows enable row level security;
+alter table public.hidden_workflows enable row level security;
+alter table public.workflow_shares enable row level security;
+alter table public.chats enable row level security;
+alter table public.chat_messages enable row level security;
+alter table public.tabular_reviews enable row level security;
+alter table public.tabular_cells enable row level security;
+alter table public.tabular_review_chats enable row level security;
+alter table public.tabular_review_chat_messages enable row level security;
+
+revoke all on public.user_profiles from anon, authenticated;
+revoke all on public.projects from anon, authenticated;
+revoke all on public.project_subfolders from anon, authenticated;
+revoke all on public.documents from anon, authenticated;
+revoke all on public.document_versions from anon, authenticated;
+revoke all on public.document_edits from anon, authenticated;
+revoke all on public.workflows from anon, authenticated;
+revoke all on public.hidden_workflows from anon, authenticated;
+revoke all on public.workflow_shares from anon, authenticated;
+revoke all on public.chats from anon, authenticated;
+revoke all on public.chat_messages from anon, authenticated;
+revoke all on public.tabular_reviews from anon, authenticated;
+revoke all on public.tabular_cells from anon, authenticated;
+revoke all on public.tabular_review_chats from anon, authenticated;
+revoke all on public.tabular_review_chat_messages from anon, authenticated;
+-- user_mcp_servers carries OAuth tokens and Authorization headers; it
+-- absolutely must not be reachable via PostgREST under anon/authenticated.
+revoke all on public.user_mcp_servers from anon, authenticated;

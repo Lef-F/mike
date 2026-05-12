@@ -100,12 +100,16 @@ export async function ensureReviewAccess(
     userId: string,
     userEmail: string | null | undefined,
     db: Db,
-): Promise<{ ok: true; isOwner: boolean } | { ok: false }> {
-    if (review.user_id === userId) return { ok: true, isOwner: true };
+): Promise<
+    | { ok: true; isOwner: boolean; via: "owner" | "project" | "direct" }
+    | { ok: false }
+> {
+    if (review.user_id === userId)
+        return { ok: true, isOwner: true, via: "owner" };
     const email = (userEmail ?? "").toLowerCase();
-    if (email && Array.isArray(review.shared_with)) {
+    if (!review.project_id && email && Array.isArray(review.shared_with)) {
         if (review.shared_with.some((e) => (e ?? "").toLowerCase() === email)) {
-            return { ok: true, isOwner: false };
+            return { ok: true, isOwner: false, via: "direct" };
         }
     }
     if (!review.project_id) return { ok: false };
@@ -115,8 +119,14 @@ export async function ensureReviewAccess(
         userEmail,
         db,
     );
-    if (access.ok) return { ok: true, isOwner: false };
+    if (access.ok) return { ok: true, isOwner: false, via: "project" };
     return { ok: false };
+}
+
+export function canEditReview(
+    access: { ok: true; isOwner: boolean; via?: "owner" | "project" | "direct" },
+): boolean {
+    return access.isOwner || access.via === "project";
 }
 
 /**
@@ -129,13 +139,16 @@ export async function listAccessibleProjectIds(
     userEmail: string | null | undefined,
     db: Db,
 ): Promise<string[]> {
+    // Stored shared_with values are lowercase; lowercase the JWT email too
+    // so providers that issue mixed-case email claims still match the row.
+    const email = userEmail?.toLowerCase();
     const [{ data: own }, { data: shared }] = await Promise.all([
         db.from("projects").select("id").eq("user_id", userId),
-        userEmail
+        email
             ? db
                   .from("projects")
                   .select("id")
-                  .contains("shared_with", JSON.stringify([userEmail]))
+                  .contains("shared_with", JSON.stringify([email]))
                   .neq("user_id", userId)
             : Promise.resolve({ data: [] as { id: string }[] }),
     ]);

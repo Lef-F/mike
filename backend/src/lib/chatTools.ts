@@ -21,6 +21,8 @@ import {
     type LlmMessage,
     type OpenAIToolSchema,
 } from "./llm";
+import { findMcpServerForTool } from "./mcp/servers";
+import type { LoadedMcpServer } from "./mcp/types";
 
 const STANDARD_FONT_DATA_URL = (() => {
     try {
@@ -1140,18 +1142,10 @@ async function readDocumentContent(
     opts?: { emitEvents?: boolean },
 ): Promise<string> {
     const emitEvents = opts?.emitEvents ?? true;
-    console.log(`[read_document] called with docLabel="${docLabel}"`);
     const docInfo = docStore.get(docLabel);
     if (!docInfo) {
-        console.log(
-            `[read_document] MISS — docLabel "${docLabel}" not in docStore. Known labels:`,
-            Array.from(docStore.keys()),
-        );
         return "Document not found.";
     }
-    console.log(
-        `[read_document] docInfo: filename="${docInfo.filename}", file_type="${docInfo.file_type}", storage_path="${docInfo.storage_path}"`,
-    );
 
     const documentId = docIndex?.[docLabel]?.document_id;
     const emitDocRead = () => {
@@ -1185,93 +1179,39 @@ async function readDocumentContent(
                     current.bytes.byteOffset + current.bytes.byteLength,
                 ) as ArrayBuffer;
                 sourcePath = current.storage_path;
-                console.log(
-                    `[read_document] using current version path="${sourcePath}" (bytes=${raw.byteLength})`,
-                );
-            } else {
-                console.log(
-                    `[read_document] loadCurrentVersionBytes returned null for documentId="${documentId}", falling back to original storage_path`,
-                );
             }
         }
         if (!raw) {
             raw = await downloadFile(docInfo.storage_path);
-            if (raw) {
-                console.log(
-                    `[read_document] fallback download from storage_path="${docInfo.storage_path}" (bytes=${raw.byteLength})`,
-                );
-            }
         }
         if (!raw) {
-            console.log(
-                `[read_document] FAILED to download any bytes for docLabel="${docLabel}" (tried path="${sourcePath}")`,
-            );
             emitDocRead();
             return "Document could not be read.";
-        }
-        // Log the first 8 bytes so we can identify real file format regardless
-        // of the declared file_type. Valid .docx starts with "PK\x03\x04"
-        // (zip). Legacy .doc starts with "\xD0\xCF\x11\xE0" (OLE/CFB).
-        // %PDF-1 is a PDF even if mislabeled. Truncated uploads show as all-zero.
-        {
-            const head = Buffer.from(raw).subarray(0, 8);
-            const hex = head.toString("hex");
-            const ascii = head
-                .toString("binary")
-                .replace(/[^\x20-\x7e]/g, ".");
-            console.log(
-                `[read_document] magic bytes hex=${hex} ascii="${ascii}" for filename="${docInfo.filename}"`,
-            );
         }
         let text: string;
         if (docInfo.file_type === "pdf") {
             text = await extractPdfText(raw);
-            console.log(
-                `[read_document] pdf extracted length=${text.length} for filename="${docInfo.filename}"`,
-            );
         } else if (docInfo.file_type === "docx") {
             // Use the same flattening as the edit_document matcher so the
             // LLM sees exactly the characters it can anchor against.
             text = await extractDocxBodyText(Buffer.from(raw));
-            console.log(
-                `[read_document] docx extractDocxBodyText length=${text.length} for filename="${docInfo.filename}"`,
-            );
             if (!text) {
-                console.log(
-                    `[read_document] docx accepted-view extractor returned empty, falling back to mammoth for filename="${docInfo.filename}"`,
-                );
                 const mammoth = await import("mammoth");
                 const result = await mammoth.extractRawText({
                     buffer: Buffer.from(raw),
                 });
                 text = result.value;
-                console.log(
-                    `[read_document] docx mammoth fallback length=${text.length} for filename="${docInfo.filename}"`,
-                );
             }
         } else {
-            console.log(
-                `[read_document] unknown file_type="${docInfo.file_type}" for filename="${docInfo.filename}", trying mammoth`,
-            );
             const mammoth = await import("mammoth");
             const result = await mammoth.extractRawText({
                 buffer: Buffer.from(raw),
             });
             text = result.value;
-            console.log(
-                `[read_document] mammoth length=${text.length} for filename="${docInfo.filename}"`,
-            );
         }
-        console.log(
-            `[read_document] DONE filename="${docInfo.filename}" finalTextLength=${text.length} firstChars=${JSON.stringify(text.slice(0, 120))}`,
-        );
         emitDocRead();
         return text;
     } catch (err) {
-        console.log(
-            `[read_document] THREW for docLabel="${docLabel}" filename="${docInfo.filename}":`,
-            err,
-        );
         if (emitEvents)
             write(`data: ${JSON.stringify({ type: "doc_read", filename: docInfo.filename })}\n\n`);
         return "Document could not be read.";
@@ -1484,6 +1424,32 @@ export type DocReplicatedResult = {
     }[];
 };
 
+/**
+ * One MCP tool call worth of observability — surfaced to the chat UI so the
+ * user can see what was sent and what came back. `args` and `output` are
+ * already capped in size before this event is emitted/persisted.
+ */
+export type McpToolResultEvent = {
+    type: "mcp_tool_result";
+    server: string;
+    tool: string;
+    ok: boolean;
+    args: string;
+    output: string;
+};
+
+/**
+ * Cap previewed args/output to keep `chat_messages.content` from bloating.
+ * The model still receives the full untruncated tool output — this only
+ * affects what is shown to and persisted for the user.
+ */
+const MCP_PREVIEW_MAX = 4096;
+
+function truncateForPreview(s: string): string {
+    if (s.length <= MCP_PREVIEW_MAX) return s;
+    return s.slice(0, MCP_PREVIEW_MAX) + "\n…(truncated)";
+}
+
 export async function runToolCalls(
     toolCalls: ToolCall[],
     docStore: DocStore,
@@ -1495,6 +1461,7 @@ export async function runToolCalls(
     docIndex?: DocIndex,
     turnEditState?: TurnEditState,
     projectId?: string | null,
+    mcpServers?: LoadedMcpServer[],
 ): Promise<{
     toolResults: unknown[];
     docsRead: { filename: string; document_id?: string }[];
@@ -1503,6 +1470,7 @@ export async function runToolCalls(
     docsReplicated: DocReplicatedResult[];
     workflowsApplied: { workflow_id: string; title: string }[];
     docsEdited: DocEditedResult[];
+    mcpResults: McpToolResultEvent[];
 }> {
     const toolResults: unknown[] = [];
     const docsRead: { filename: string; document_id?: string }[] = [];
@@ -1515,6 +1483,7 @@ export async function runToolCalls(
     const docsReplicated: DocReplicatedResult[] = [];
     const workflowsApplied: { workflow_id: string; title: string }[] = [];
     const docsEdited: DocEditedResult[] = [];
+    const mcpResults: McpToolResultEvent[] = [];
 
     for (const tc of toolCalls) {
         let args: Record<string, unknown> = {};
@@ -1522,6 +1491,49 @@ export async function runToolCalls(
             args = JSON.parse(tc.function.arguments || "{}");
         } catch {
             /* ignore */
+        }
+
+        if (tc.function.name.startsWith("mcp__") && mcpServers?.length) {
+            const match = findMcpServerForTool(tc.function.name, mcpServers);
+            if (!match) {
+                toolResults.push({
+                    role: "tool",
+                    tool_call_id: tc.id,
+                    content: `MCP tool '${tc.function.name}' not available (server may have been removed mid-request).`,
+                });
+                continue;
+            }
+            const { server, originalName } = match;
+            write(
+                `data: ${JSON.stringify({
+                    type: "mcp_tool_call",
+                    server: server.row.name,
+                    tool: originalName,
+                })}\n\n`,
+            );
+            const { ok, content } = await server.client.callTool(
+                originalName,
+                args,
+            );
+            // The model already sees content capped at MCP_MAX_TOOL_BYTES
+            // (mcp/client.ts); the user-facing preview is further capped here
+            // to keep chat_messages.content from bloating.
+            const preview: McpToolResultEvent = {
+                type: "mcp_tool_result",
+                server: server.row.name,
+                tool: originalName,
+                ok,
+                args: truncateForPreview(JSON.stringify(args)),
+                output: truncateForPreview(content),
+            };
+            write(`data: ${JSON.stringify(preview)}\n\n`);
+            mcpResults.push(preview);
+            toolResults.push({
+                role: "tool",
+                tool_call_id: tc.id,
+                content,
+            });
+            continue;
         }
 
         if (tc.function.name === "read_document") {
@@ -2123,7 +2135,6 @@ export async function runToolCalls(
         } else if (tc.function.name === "generate_docx") {
             const title = args.title as string;
             const landscape = !!(args.landscape);
-            console.log(`[generate_docx] title="${title}" landscape=${landscape} args.landscape=${args.landscape}`);
             const previewFilename = `${(title.replace(/[^a-zA-Z0-9 _-]/g, "").trim().slice(0, 64) || "document")}.docx`;
             write(`data: ${JSON.stringify({ type: "doc_created_start", filename: previewFilename })}\n\n`);
             const result = await generateDocx(
@@ -2206,6 +2217,7 @@ export async function runToolCalls(
         docsReplicated,
         workflowsApplied,
         docsEdited,
+        mcpResults,
     };
 }
 
@@ -2291,7 +2303,8 @@ type AssistantEvent =
           download_url: string;
           annotations: EditAnnotation[];
       }
-    | { type: "content"; text: string };
+    | { type: "content"; text: string }
+    | McpToolResultEvent;
 
 export async function runLLMStream(params: {
     apiMessages: unknown[];
@@ -2312,25 +2325,28 @@ export async function runLLMStream(params: {
      * generated docs still get persisted, but as standalone documents.
      */
     projectId?: string | null;
+    /**
+     * MCP servers loaded for this user (already connected, with tool lists
+     * fetched). Their tools are merged into the per-request tool set under
+     * the `mcp__<slug>__` prefix. Leave undefined when no MCP support is
+     * wired in or the user has none configured.
+     */
+    mcpServers?: LoadedMcpServer[];
 }): Promise<{ fullText: string; events: AssistantEvent[] }> {
-    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId } = params;
-    const activeTools = extraTools?.length
-        ? [...TOOLS, ...WORKFLOW_TOOLS, ...extraTools]
-        : [...TOOLS, ...WORKFLOW_TOOLS];
+    const { apiMessages, docStore, docIndex, userId, db, write, extraTools, workflowStore, tabularStore, buildCitations, model, apiKeys, projectId, mcpServers } = params;
+    const mcpTools = (mcpServers ?? []).flatMap((s) => s.tools);
+    const activeTools = [
+        ...TOOLS,
+        ...WORKFLOW_TOOLS,
+        ...(extraTools ?? []),
+        ...mcpTools,
+    ];
 
     // Extract system prompt; pass remaining turns to the adapter as
     // plain user/assistant messages.
     const rawMsgs = apiMessages as { role: string; content: string | null }[];
     const systemPrompt =
         rawMsgs[0]?.role === "system" ? (rawMsgs[0].content ?? "") : "";
-    console.log(
-        "[runLLMStream] system prompt:\n" +
-            "─".repeat(80) +
-            "\n" +
-            systemPrompt +
-            "\n" +
-            "─".repeat(80),
-    );
     const chatMessages: LlmMessage[] = rawMsgs
         .filter((m) => m.role !== "system")
         .map((m) => ({
@@ -2444,10 +2460,21 @@ export async function runLLMStream(params: {
             // and the first tool-specific event.
             onToolCallStart: (call) => {
                 flushText();
+                // For MCP tools, emit a friendly display name (server + tool)
+                // alongside the raw prefixed name. The UI renders display_name
+                // when present so users don't see `mcp__<slug>__<tool>`.
+                let display_name: string | undefined;
+                if (call.name.startsWith("mcp__") && mcpServers?.length) {
+                    const match = findMcpServerForTool(call.name, mcpServers);
+                    if (match) {
+                        display_name = `${match.server.row.name} · ${match.originalName}`;
+                    }
+                }
                 write(
                     `data: ${JSON.stringify({
                         type: "tool_call_start",
                         name: call.name,
+                        ...(display_name ? { display_name } : {}),
                     })}\n\n`,
                 );
             },
@@ -2472,6 +2499,7 @@ export async function runLLMStream(params: {
                 docsReplicated,
                 workflowsApplied,
                 docsEdited,
+                mcpResults,
             } = await runToolCalls(
                     toolCalls,
                     docStore,
@@ -2483,6 +2511,7 @@ export async function runLLMStream(params: {
                     docIndex,
                     turnEditState,
                     projectId,
+                    mcpServers,
                 );
             for (const r of docsRead) {
                 events.push({
@@ -2534,6 +2563,9 @@ export async function runLLMStream(params: {
                     download_url: e.download_url,
                     annotations: e.annotations,
                 });
+            }
+            for (const r of mcpResults) {
+                events.push(r);
             }
 
             // Index alignment would break if any tool branch skips its
@@ -2698,14 +2730,6 @@ export async function buildDocContext(
         }
     }
 
-    console.log(
-        "[buildDocContext] available docs:",
-        Object.entries(docIndex).map(([label, info]) => ({
-            label,
-            filename: info.filename,
-            document_id: info.document_id,
-        })),
-    );
     return { docIndex, docStore };
 }
 
@@ -2776,15 +2800,6 @@ export async function buildProjectDocContext(
         if (path) folderPaths.set(docLabel, path);
     }
 
-    console.log(
-        "[buildProjectDocContext] available docs:",
-        Object.entries(docIndex).map(([label, info]) => ({
-            label,
-            filename: info.filename,
-            document_id: info.document_id,
-            folder: folderPaths.get(label) ?? null,
-        })),
-    );
     return { docIndex, docStore, folderPaths };
 }
 

@@ -27,4 +27,16 @@ done
 echo "init-db: applying /migrations/000_one_shot_schema.sql"
 psql -v ON_ERROR_STOP=1 -f /migrations/000_one_shot_schema.sql
 
+# Apply incremental migrations in numeric order, skipping 000 (the
+# one-shot schema we already applied above). Each is idempotent
+# (CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS / etc.) so re-running
+# on every boot is safe.
+ls /migrations/[0-9][0-9][0-9]_*.sql 2>/dev/null | sort | while IFS= read -r migration; do
+  case "$(basename "$migration")" in
+    000_*) continue ;;
+  esac
+  echo "init-db: applying $migration"
+  psql -v ON_ERROR_STOP=1 -f "$migration"
+done
+
 echo "init-db: complete"

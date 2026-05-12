@@ -1,5 +1,9 @@
 import { createServerSupabase } from "./supabase";
 import {
+    decryptApiKey,
+    buildPlaintextUpgrades,
+} from "./apiKeys";
+import {
     resolveModel,
     DEFAULT_TITLE_MODEL,
     DEFAULT_TABULAR_MODEL,
@@ -29,14 +33,11 @@ export async function getUserModelSettings(
     const client = db ?? createServerSupabase();
     const { data } = await client
         .from("user_profiles")
-        .select("tabular_model, claude_api_key, gemini_api_key")
+        .select("tabular_model, claude_api_key, gemini_api_key, openrouter_api_key")
         .eq("user_id", userId)
         .single();
 
-    const api_keys: UserApiKeys = {
-        claude: data?.claude_api_key ?? null,
-        gemini: data?.gemini_api_key ?? null,
-    };
+    const api_keys = await decryptAndUpgradeApiKeys(userId, data, client);
 
     return {
         title_model: resolveTitleModel(api_keys),
@@ -52,11 +53,43 @@ export async function getUserApiKeys(
     const client = db ?? createServerSupabase();
     const { data } = await client
         .from("user_profiles")
-        .select("claude_api_key, gemini_api_key")
+        .select("claude_api_key, gemini_api_key, openrouter_api_key")
         .eq("user_id", userId)
         .single();
-    return {
-        claude: data?.claude_api_key ?? null,
-        gemini: data?.gemini_api_key ?? null,
+    return decryptAndUpgradeApiKeys(userId, data, client);
+}
+
+async function decryptAndUpgradeApiKeys(
+    userId: string,
+    data:
+        | {
+              claude_api_key?: string | null;
+              gemini_api_key?: string | null;
+              openrouter_api_key?: string | null;
+          }
+        | null,
+    client: ReturnType<typeof createServerSupabase>,
+): Promise<UserApiKeys> {
+    const storedClaude = data?.claude_api_key ?? null;
+    const storedGemini = data?.gemini_api_key ?? null;
+    const storedOpenrouter = data?.openrouter_api_key ?? null;
+    const apiKeys: UserApiKeys = {
+        claude: decryptApiKey(storedClaude),
+        gemini: decryptApiKey(storedGemini),
+        openrouter: decryptApiKey(storedOpenrouter),
     };
+
+    const updates = buildPlaintextUpgrades({
+        claude_api_key: storedClaude,
+        gemini_api_key: storedGemini,
+        openrouter_api_key: storedOpenrouter,
+    });
+    if (Object.keys(updates).length > 0) {
+        await client
+            .from("user_profiles")
+            .update({ ...updates, updated_at: new Date().toISOString() })
+            .eq("user_id", userId);
+    }
+
+    return apiKeys;
 }
