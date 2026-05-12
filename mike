@@ -20,7 +20,7 @@ fi
 
 # Read modes without exporting the whole .env file.
 read_var() {
-  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
 }
 
 SUPABASE_MODE="$(read_var MIKE_SUPABASE_MODE)"
@@ -70,9 +70,9 @@ case "${1:-}" in
     ;;
   migrate)
     shift
-    exec docker compose "${PROFILES[@]}" run --rm init-db "$@"
+    exec docker compose ${PROFILES[@]+"${PROFILES[@]}"} run --rm init-db "$@"
     ;;
   *)
-    exec docker compose "${PROFILES[@]}" "$@"
+    exec docker compose ${PROFILES[@]+"${PROFILES[@]}"} "$@"
     ;;
 esac
