@@ -17,15 +17,27 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl as awsGetSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-function getClient(): S3Client {
-  return new S3Client({
-    region: "auto",
+export interface S3ClientConfig {
+  region: string;
+  endpoint: string;
+  forcePathStyle: boolean;
+  credentials: { accessKeyId: string; secretAccessKey: string };
+}
+
+export function buildS3Config(): S3ClientConfig {
+  return {
+    region: process.env.R2_REGION ?? "auto",
     endpoint: process.env.R2_ENDPOINT_URL!,
+    forcePathStyle: process.env.R2_FORCE_PATH_STYLE === "true",
     credentials: {
       accessKeyId: process.env.R2_ACCESS_KEY_ID!,
       secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
     },
-  });
+  };
+}
+
+function getClient(): S3Client {
+  return new S3Client(buildS3Config());
 }
 
 const BUCKET = process.env.R2_BUCKET_NAME ?? "mike";

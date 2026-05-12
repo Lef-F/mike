@@ -1,42 +1,70 @@
 #!/bin/sh
-# init-db: applies Mike's one-shot SQL schema after GoTrue has finished its
-# own startup migrations (so that auth.users exists for the FK references).
+# init-db: applies Mike's SQL schema after the configured Postgres
+# (bundled or external) is reachable and GoTrue has populated auth.users.
+# Works for every MIKE_SUPABASE_MODE because it speaks plain psql.
 set -e
 
-: "${PGHOST:?PGHOST not set}"
-: "${PGUSER:?PGUSER not set}"
-: "${PGDATABASE:?PGDATABASE not set}"
-: "${PGPASSWORD:?PGPASSWORD not set}"
+# In bundled-fallback mode we use individual PG* env vars so the password
+# stays in PGPASSWORD (read silently by psql) and is never embedded in a
+# connection-string that error messages would echo to stderr / docker logs.
+# In PG_URL mode the operator chose to put credentials in the URL themselves.
+if [ -n "${PG_URL:-}" ]; then
+  PSQL_ARGS="$PG_URL"
+  CONN_DESC="$(printf '%s' "$PG_URL" | sed 's|://[^@]*@|://|')"
+else
+  : "${PGHOST:?PGHOST or PG_URL must be set}"
+  : "${PGUSER:?PGUSER must be set}"
+  : "${PGDATABASE:?PGDATABASE must be set}"
+  : "${PGPASSWORD:?PGPASSWORD must be set}"
+  PSQL_ARGS="-h $PGHOST -U $PGUSER -d $PGDATABASE"
+  CONN_DESC="${PGUSER}@${PGHOST}/${PGDATABASE}"
+fi
 
-echo "init-db: waiting for postgres..."
-until pg_isready -h "$PGHOST" -U "$PGUSER" -d "$PGDATABASE" -q; do
+echo "init-db: waiting for postgres at $CONN_DESC..."
+i=0
+# shellcheck disable=SC2086  # PSQL_ARGS is intentionally split into flags
+until pg_isready $PSQL_ARGS -q; do
+  i=$((i+1))
+  if [ "$i" -gt 60 ]; then
+    echo "init-db: postgres did not become ready after 60s" >&2
+    exit 1
+  fi
   sleep 1
 done
 
-echo "init-db: waiting for gotrue migrations (auth.users)..."
+echo "init-db: waiting for auth.users to exist..."
 i=0
-until [ "$(psql -tAc "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='users'")" = "1" ]; do
+# shellcheck disable=SC2086
+until [ "$(psql $PSQL_ARGS -tAc "SELECT 1 FROM information_schema.tables WHERE table_schema='auth' AND table_name='users'")" = "1" ]; do
   i=$((i+1))
   if [ "$i" -gt 60 ]; then
-    echo "init-db: gotrue did not create auth.users after 120s" >&2
+    echo "init-db: auth.users not present after 120s (GoTrue migrations didn't run?)" >&2
     exit 1
   fi
   sleep 2
 done
 
 echo "init-db: applying /migrations/000_one_shot_schema.sql"
-psql -v ON_ERROR_STOP=1 -f /migrations/000_one_shot_schema.sql
+# shellcheck disable=SC2086
+psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f /migrations/000_one_shot_schema.sql
 
-# Apply incremental migrations in numeric order, skipping 000 (the
-# one-shot schema we already applied above). Each is idempotent
-# (CREATE OR REPLACE / ADD COLUMN IF NOT EXISTS / etc.) so re-running
-# on every boot is safe.
-ls /migrations/[0-9][0-9][0-9]_*.sql 2>/dev/null | sort | while IFS= read -r migration; do
+# Apply incremental migrations in numeric order, skipping 000.
+# All migrations are idempotent (CREATE OR REPLACE / IF NOT EXISTS / etc.)
+# so re-running on every boot is safe.
+applied=0
+for migration in /migrations/[0-9][0-9][0-9]_*.sql; do
+  # If no files match the glob, the literal pattern is preserved — skip it.
+  case "$migration" in
+    "/migrations/[0-9][0-9][0-9]_*.sql") continue ;;
+  esac
   case "$(basename "$migration")" in
     000_*) continue ;;
   esac
   echo "init-db: applying $migration"
-  psql -v ON_ERROR_STOP=1 -f "$migration"
+  # shellcheck disable=SC2086
+  psql $PSQL_ARGS -v ON_ERROR_STOP=1 -f "$migration"
+  applied=$((applied+1))
 done
+echo "init-db: applied $applied incremental migrations"
 
 echo "init-db: complete"

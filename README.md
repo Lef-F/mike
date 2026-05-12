@@ -76,8 +76,55 @@ cd mike
 cp .env.example .env
 ./scripts/generate-secrets.sh
 $EDITOR .env                   # set ANTHROPIC_API_KEY and/or GEMINI_API_KEY
-docker compose up -d --build   # ~5 min first time
+./mike up -d --build           # ~5 min first time
 open http://localhost
+```
+
+### Deployment modes
+
+Mike's compose stack supports six deployment combinations selected by two
+env vars in `.env`:
+
+| `MIKE_SUPABASE_MODE` | `MIKE_STORAGE_MODE` | What runs in-cluster | What you provide |
+| --- | --- | --- | --- |
+| `bundled-full` (default) | `bundled` (default) | Everything | Nothing |
+| `bundled-full` | `external` | Postgres, GoTrue, PostgREST | R2/S3 endpoint + creds |
+| `bundled-byo-db` | `bundled` | GoTrue, PostgREST, Garage | `EXTERNAL_POSTGRES_URL` |
+| `bundled-byo-db` | `external` | GoTrue, PostgREST | External PG + R2/S3 |
+| `external` | `bundled` | Garage | Hosted Supabase keys |
+| `external` | `external` | (nothing optional) | Hosted Supabase + R2/S3 |
+
+Switching modes:
+1. Edit `MIKE_SUPABASE_MODE` and/or `MIKE_STORAGE_MODE` in `.env`.
+2. Set the matching `EXTERNAL_*` values (see `.env.example` for the
+   full list and which mode requires which).
+3. Run `./scripts/generate-secrets.sh` to fill in only the secrets the
+   new mode needs (warns about missing operator-supplied values).
+4. **If switching to/from `external` Supabase mode**, you also need to
+   rebuild the frontend image: the Supabase URL is baked at build time.
+   `./mike build mike-frontend` does this.
+5. `./mike up -d`.
+
+The `./mike` wrapper reads the modes from `.env`, validates them, and
+forwards to `docker compose` with the right `--profile` flags. Run
+`./mike --print-profiles` to see what flags will be used.
+
+#### Hosted Supabase (`external`) migration note
+
+When `MIKE_SUPABASE_MODE=external`, set `EXTERNAL_SUPABASE_PG_URL` to
+the Postgres connection string from Supabase's Project Settings →
+Database → "Connection string". Mike's `init-db` service will apply
+the schema migrations against the hosted DB on first `./mike up`
+(idempotent — safe to re-run).
+
+#### Smoke test
+
+`scripts/smoke-test.sh` brings the default-mode stack up, waits for
+Caddy on `${MIKE_PORT:-80}`, hits the frontend + backend, and tears
+down. Useful as a CI/post-rebase sanity check.
+
+```bash
+./scripts/smoke-test.sh
 ```
 
 ### Stack
@@ -95,7 +142,7 @@ open http://localhost
 
 ### Configuration
 
-- **Port:** edit `MIKE_PORT` in `.env`. Changing it requires `docker compose build mike-frontend` because Next.js bakes URLs at build time.
+- **Port:** edit `MIKE_PORT` in `.env`. Changing it requires `./mike build mike-frontend` because Next.js bakes URLs at build time.
 - **Email confirmation:** off by default (`GOTRUE_MAILER_AUTOCONFIRM=true`). To enable, set it to `false` and add `GOTRUE_SMTP_HOST` / `GOTRUE_SMTP_USER` / `GOTRUE_SMTP_PASS` / `GOTRUE_SMTP_PORT` / `GOTRUE_SMTP_ADMIN_EMAIL` to the `gotrue` service env in `docker-compose.yml`.
 - **Reset everything:** `docker compose down -v` deletes all volumes (Postgres data, Garage data, generated Garage credentials, Caddy state).
 

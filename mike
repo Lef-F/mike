@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Mike CLI wrapper: reads deployment modes from .env, computes
+# docker compose --profile flags, and dispatches.
+#
+# Subcommands:
+#   ./mike up [-d|--build|...]   bring stack up
+#   ./mike down [args]           tear stack down
+#   ./mike build [service]       build images
+#   ./mike logs [service]        tail logs
+#   ./mike migrate               re-run init-db only
+#   ./mike --print-profiles      print computed --profile flags (debugging/testing)
+#   ./mike <anything-else>       forwarded verbatim to `docker compose`
+set -euo pipefail
+
+ENV_FILE="${MIKE_ENV_FILE:-.env}"
+if [ ! -f "$ENV_FILE" ]; then
+  echo "error: $ENV_FILE not found (run: cp .env.example .env)" >&2
+  exit 1
+fi
+
+# Read modes without exporting the whole .env file.
+read_var() {
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
+}
+
+SUPABASE_MODE="$(read_var MIKE_SUPABASE_MODE)"
+STORAGE_MODE="$(read_var MIKE_STORAGE_MODE)"
+
+# Validate.
+case "$SUPABASE_MODE" in
+  bundled-full|bundled-byo-db|external) ;;
+  *)
+    echo "error: MIKE_SUPABASE_MODE must be one of bundled-full|bundled-byo-db|external (got: '${SUPABASE_MODE}')" >&2
+    exit 2
+    ;;
+esac
+case "$STORAGE_MODE" in
+  bundled|external) ;;
+  *)
+    echo "error: MIKE_STORAGE_MODE must be one of bundled|external (got: '${STORAGE_MODE}')" >&2
+    exit 2
+    ;;
+esac
+
+# Compute profiles.
+PROFILES=()
+[ "$SUPABASE_MODE" = "bundled-full" ] && PROFILES+=("--profile" "db-bundled")
+case "$SUPABASE_MODE" in
+  bundled-full|bundled-byo-db) PROFILES+=("--profile" "supabase-shim") ;;
+esac
+[ "$STORAGE_MODE" = "bundled" ] && PROFILES+=("--profile" "storage-bundled")
+
+# Special: --print-profiles is a debugging/testing entry point that
+# emits just the flag list (or empty string for the all-external case).
+if [ "${1:-}" = "--print-profiles" ]; then
+  if [ "${#PROFILES[@]}" -eq 0 ]; then
+    echo ""
+  else
+    echo "${PROFILES[*]}"
+  fi
+  exit 0
+fi
+
+# Subcommand dispatch — everything is forwarded to docker compose with
+# the computed profiles. `migrate` is a thin alias for re-running init-db.
+case "${1:-}" in
+  "")
+    echo "usage: ./mike <up|down|build|logs|migrate|...>" >&2
+    exit 64
+    ;;
+  migrate)
+    shift
+    exec docker compose ${PROFILES[@]+"${PROFILES[@]}"} run --rm init-db "$@"
+    ;;
+  *)
+    exec docker compose ${PROFILES[@]+"${PROFILES[@]}"} "$@"
+    ;;
+esac

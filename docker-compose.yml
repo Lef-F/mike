@@ -2,6 +2,7 @@ name: mike
 
 services:
   postgres:
+    profiles: ["db-bundled"]
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
@@ -19,17 +20,15 @@ services:
       retries: 20
 
   gotrue:
+    profiles: ["supabase-shim"]
     image: supabase/gotrue:v2.166.0
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
       GOTRUE_API_HOST: 0.0.0.0
       GOTRUE_API_PORT: 9999
       API_EXTERNAL_URL: http://${MIKE_HOST}:${MIKE_PORT}/auth/v1
       GOTRUE_DB_DRIVER: postgres
-      GOTRUE_DB_DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=auth
+      GOTRUE_DB_DATABASE_URL: ${EXTERNAL_SUPABASE_GOTRUE_PG_URL:-postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable&search_path=auth}
       GOTRUE_SITE_URL: http://${MIKE_HOST}:${MIKE_PORT}
       GOTRUE_URI_ALLOW_LIST: http://${MIKE_HOST}:${MIKE_PORT}
       GOTRUE_DISABLE_SIGNUP: ${GOTRUE_DISABLE_SIGNUP}
@@ -48,13 +47,11 @@ services:
       retries: 20
 
   postgrest:
+    profiles: ["supabase-shim"]
     image: postgrest/postgrest:v12.2.3
     restart: unless-stopped
-    depends_on:
-      init-db:
-        condition: service_completed_successfully
     environment:
-      PGRST_DB_URI: postgres://authenticator:${AUTHENTICATOR_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      PGRST_DB_URI: ${EXTERNAL_POSTGRES_AUTHENTICATOR_URL:-postgres://authenticator:${AUTHENTICATOR_PASSWORD}@postgres:5432/${POSTGRES_DB}}
       PGRST_DB_SCHEMAS: public
       PGRST_DB_ANON_ROLE: anon
       PGRST_JWT_SECRET: ${JWT_SECRET}
@@ -62,6 +59,7 @@ services:
       PGRST_SERVER_PORT: 3000
 
   garage:
+    profiles: ["storage-bundled"]
     image: dxflrs/garage:v2.3.0
     restart: unless-stopped
     environment:
@@ -85,13 +83,12 @@ services:
       retries: 20
 
   init-db:
+    # No `profiles:` — runs in every mode. The script polls pg_isready
+    # and information_schema.tables, so it tolerates whichever Postgres
+    # (bundled or external) is reachable via the env below.
     image: postgres:16-alpine
-    depends_on:
-      postgres:
-        condition: service_healthy
-      gotrue:
-        condition: service_healthy
     environment:
+      PG_URL: ${EXTERNAL_SUPABASE_PG_URL:-${EXTERNAL_POSTGRES_URL:-}}
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
@@ -103,6 +100,7 @@ services:
     restart: "no"
 
   init-garage:
+    profiles: ["storage-bundled"]
     image: alpine:3.20
     depends_on:
       garage:
@@ -125,15 +123,13 @@ services:
     depends_on:
       init-db:
         condition: service_completed_successfully
-      init-garage:
-        condition: service_completed_successfully
-      gotrue:
-        condition: service_healthy
+      # init-garage is profile-gated; backend-entrypoint.sh waits for
+      # /run/secrets/garage.env when in bundled storage mode.
     environment:
       PORT: 3001
       FRONTEND_URL: http://${MIKE_HOST}:${MIKE_PORT}
-      SUPABASE_URL: http://caddy:${MIKE_PORT}
-      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
+      SUPABASE_URL: ${EXTERNAL_SUPABASE_URL:-http://caddy:${MIKE_PORT}}
+      SUPABASE_SECRET_KEY: ${EXTERNAL_SUPABASE_SERVICE_KEY:-${SUPABASE_SECRET_KEY}}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -141,8 +137,12 @@ services:
       USER_API_KEYS_ENCRYPTION_KEY: ${USER_API_KEYS_ENCRYPTION_KEY}
       BACKEND_PUBLIC_URL: ${BACKEND_PUBLIC_URL:-http://${MIKE_HOST}:${MIKE_PORT}/backend}
       MCP_ALLOW_PRIVATE_HOSTS: ${MCP_ALLOW_PRIVATE_HOSTS:-true}
-      R2_ENDPOINT_URL: http://garage:3900
-      R2_BUCKET_NAME: ${R2_BUCKET_NAME}
+      R2_ENDPOINT_URL: ${R2_ENDPOINT_URL:-http://garage:3900}
+      R2_BUCKET_NAME: ${R2_BUCKET_NAME:-mike}
+      R2_REGION: ${R2_REGION:-auto}
+      R2_FORCE_PATH_STYLE: ${R2_FORCE_PATH_STYLE:-false}
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
     volumes:
       - garage_creds:/run/secrets:ro
 
@@ -151,8 +151,8 @@ services:
       context: .
       dockerfile: docker/frontend.Dockerfile
       args:
-        NEXT_PUBLIC_SUPABASE_URL: http://${MIKE_HOST}:${MIKE_PORT}
-        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${SUPABASE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_SUPABASE_URL: ${EXTERNAL_SUPABASE_URL:-http://${MIKE_HOST}:${MIKE_PORT}}
+        NEXT_PUBLIC_SUPABASE_PUBLISHABLE_DEFAULT_KEY: ${EXTERNAL_SUPABASE_ANON_KEY:-${SUPABASE_PUBLISHABLE_KEY}}
         NEXT_PUBLIC_API_BASE_URL: http://${MIKE_HOST}:${MIKE_PORT}/backend
     image: mike-frontend:local
     restart: unless-stopped
@@ -164,14 +164,9 @@ services:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
-      - gotrue
-      - postgrest
       - mike-backend
       - mike-frontend
     environment:
-      # Caddy listens on :{$MIKE_PORT} (any host) so MIKE_HOST is not
-      # consumed here — it only flows into the frontend's baked URLs
-      # and GoTrue's allow-list.
       MIKE_PORT: ${MIKE_PORT}
     ports:
       - "${MIKE_PORT}:${MIKE_PORT}"
