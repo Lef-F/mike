@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Generates the secrets the docker-compose stack needs and writes them
 # into ./.env. Idempotent: existing non-empty values are kept unless --force.
+# Mode-aware: skips secrets that aren't used in the chosen
+# MIKE_SUPABASE_MODE / MIKE_STORAGE_MODE.
 set -euo pipefail
 
 command -v openssl >/dev/null 2>&1 || { echo "error: openssl is required but not found on PATH" >&2; exit 1; }
@@ -20,10 +22,9 @@ fi
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
 mint_jwt() {
-  # mint_jwt <role> <secret>
   local role="$1" secret="$2" now exp header payload b64h b64p sig
   now=$(date +%s)
-  exp=$((now + 60 * 60 * 24 * 365 * 10))   # ~10 years
+  exp=$((now + 60 * 60 * 24 * 365 * 10))
   header='{"alg":"HS256","typ":"JWT"}'
   payload="{\"role\":\"$role\",\"aud\":\"authenticated\",\"iss\":\"mike-self-hosted\",\"iat\":$now,\"exp\":$exp}"
   b64h=$(printf '%s' "$header"  | b64url)
@@ -34,15 +35,12 @@ mint_jwt() {
 }
 
 current_value() {
-  # current_value <KEY>  -> prints existing value (may be empty), stripping inline comments and whitespace
-  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); sub(/\r$/, ""); sub(/[[:space:]]+#.*$/, ""); gsub(/^[[:space:]]+|[[:space:]]+$/, ""); print; exit }' "$ENV_FILE"
 }
 
 set_value() {
-  # set_value <KEY> <VALUE>
   local key="$1" val="$2"
   if grep -qE "^${key}=" "$ENV_FILE"; then
-    # Replace in place (portable: write to tmp + mv).
     awk -F= -v k="$key" -v v="$val" '
       BEGIN { OFS="=" }
       $1 == k { print k "=" v; next }
@@ -56,7 +54,6 @@ set_value() {
 }
 
 ensure_random_hex() {
-  # ensure_random_hex <KEY> <BYTES>
   local key="$1" bytes="$2" cur
   cur=$(current_value "$key")
   if [ -z "$cur" ] || [ "$FORCE" = 1 ]; then
@@ -67,34 +64,94 @@ ensure_random_hex() {
   fi
 }
 
-# --- Generate secrets --------------------------------------------------------
-
-echo "Generating secrets in $ENV_FILE (use --force to overwrite existing)..."
-
-ensure_random_hex POSTGRES_PASSWORD     24
-ensure_random_hex AUTHENTICATOR_PASSWORD 24
-ensure_random_hex GARAGE_RPC_SECRET     32
-ensure_random_hex GARAGE_ADMIN_TOKEN    32
-ensure_random_hex JWT_SECRET            32
-ensure_random_hex DOWNLOAD_SIGNING_SECRET 32
-ensure_random_hex USER_API_KEYS_ENCRYPTION_KEY 32
-
-# JWTs depend on JWT_SECRET; regenerate them whenever JWT_SECRET changed
-# (i.e. when the user runs --force) or when they're empty.
-JWT_SECRET_VAL=$(current_value JWT_SECRET)
-
-regen_jwt() {
-  local key="$1" role="$2" cur
-  cur=$(current_value "$key")
-  if [ -z "$cur" ] || [ "$FORCE" = 1 ]; then
-    set_value "$key" "$(mint_jwt "$role" "$JWT_SECRET_VAL")"
-    echo "  set $key"
-  else
-    echo "  kept $key"
+warn_required() {
+  local key="$1" reason="$2"
+  if [ -z "$(current_value "$key")" ]; then
+    echo "  WARN: $key is empty — required because $reason" >&2
   fi
 }
 
-regen_jwt SUPABASE_PUBLISHABLE_KEY anon
-regen_jwt SUPABASE_SECRET_KEY      service_role
+# --- Read modes --------------------------------------------------------------
+
+SUPABASE_MODE="$(current_value MIKE_SUPABASE_MODE)"
+STORAGE_MODE="$(current_value MIKE_STORAGE_MODE)"
+SUPABASE_MODE="${SUPABASE_MODE:-bundled-full}"
+STORAGE_MODE="${STORAGE_MODE:-bundled}"
+
+echo "Generating secrets in $ENV_FILE (modes: supabase=$SUPABASE_MODE storage=$STORAGE_MODE; use --force to overwrite existing)..."
+
+# --- Always required ---------------------------------------------------------
+
+ensure_random_hex DOWNLOAD_SIGNING_SECRET 32
+ensure_random_hex USER_API_KEYS_ENCRYPTION_KEY 32
+
+# --- Postgres / GoTrue / PostgREST — bundled-* modes -------------------------
+
+case "$SUPABASE_MODE" in
+  bundled-full)
+    ensure_random_hex POSTGRES_PASSWORD       24
+    ensure_random_hex AUTHENTICATOR_PASSWORD  24
+    ensure_random_hex JWT_SECRET              32
+    JWT_SECRET_VAL=$(current_value JWT_SECRET)
+    if [ -z "$(current_value SUPABASE_PUBLISHABLE_KEY)" ] || [ "$FORCE" = 1 ]; then
+      set_value SUPABASE_PUBLISHABLE_KEY "$(mint_jwt anon "$JWT_SECRET_VAL")"
+      echo "  set SUPABASE_PUBLISHABLE_KEY"
+    else
+      echo "  kept SUPABASE_PUBLISHABLE_KEY"
+    fi
+    if [ -z "$(current_value SUPABASE_SECRET_KEY)" ] || [ "$FORCE" = 1 ]; then
+      set_value SUPABASE_SECRET_KEY "$(mint_jwt service_role "$JWT_SECRET_VAL")"
+      echo "  set SUPABASE_SECRET_KEY"
+    else
+      echo "  kept SUPABASE_SECRET_KEY"
+    fi
+    ;;
+  bundled-byo-db)
+    ensure_random_hex AUTHENTICATOR_PASSWORD  24
+    ensure_random_hex JWT_SECRET              32
+    JWT_SECRET_VAL=$(current_value JWT_SECRET)
+    if [ -z "$(current_value SUPABASE_PUBLISHABLE_KEY)" ] || [ "$FORCE" = 1 ]; then
+      set_value SUPABASE_PUBLISHABLE_KEY "$(mint_jwt anon "$JWT_SECRET_VAL")"
+      echo "  set SUPABASE_PUBLISHABLE_KEY"
+    else
+      echo "  kept SUPABASE_PUBLISHABLE_KEY"
+    fi
+    if [ -z "$(current_value SUPABASE_SECRET_KEY)" ] || [ "$FORCE" = 1 ]; then
+      set_value SUPABASE_SECRET_KEY "$(mint_jwt service_role "$JWT_SECRET_VAL")"
+      echo "  set SUPABASE_SECRET_KEY"
+    else
+      echo "  kept SUPABASE_SECRET_KEY"
+    fi
+    warn_required EXTERNAL_POSTGRES_URL "MIKE_SUPABASE_MODE=bundled-byo-db"
+    ;;
+  external)
+    warn_required EXTERNAL_SUPABASE_URL "MIKE_SUPABASE_MODE=external"
+    warn_required EXTERNAL_SUPABASE_ANON_KEY "MIKE_SUPABASE_MODE=external"
+    warn_required EXTERNAL_SUPABASE_SERVICE_KEY "MIKE_SUPABASE_MODE=external"
+    warn_required EXTERNAL_SUPABASE_PG_URL "MIKE_SUPABASE_MODE=external (init-db needs PG access)"
+    ;;
+  *)
+    echo "error: MIKE_SUPABASE_MODE='$SUPABASE_MODE' is not one of bundled-full|bundled-byo-db|external" >&2
+    exit 2
+    ;;
+esac
+
+# --- Storage -----------------------------------------------------------------
+
+case "$STORAGE_MODE" in
+  bundled)
+    ensure_random_hex GARAGE_RPC_SECRET   32
+    ensure_random_hex GARAGE_ADMIN_TOKEN  32
+    ;;
+  external)
+    warn_required R2_ENDPOINT_URL "MIKE_STORAGE_MODE=external"
+    warn_required R2_ACCESS_KEY_ID "MIKE_STORAGE_MODE=external"
+    warn_required R2_SECRET_ACCESS_KEY "MIKE_STORAGE_MODE=external"
+    ;;
+  *)
+    echo "error: MIKE_STORAGE_MODE='$STORAGE_MODE' is not one of bundled|external" >&2
+    exit 2
+    ;;
+esac
 
 echo "Done."
