@@ -36,9 +36,9 @@ until curl -fsS "http://localhost:$PORT" >/dev/null 2>&1; do
 done
 
 echo "smoke-test: Caddy responding on :$PORT"
-echo "smoke-test: checking backend route /backend/healthz..."
-curl -fsS "http://localhost:$PORT/backend/healthz" || {
-  echo "smoke-test: backend healthz failed" >&2
+echo "smoke-test: checking backend route /backend/health..."
+curl -fsS "http://localhost:$PORT/backend/health" || {
+  echo "smoke-test: backend /health failed" >&2
   ./mike logs --tail 50 mike-backend
   exit 1
 }
