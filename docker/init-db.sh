@@ -10,7 +10,7 @@ set -e
 # In PG_URL mode the operator chose to put credentials in the URL themselves.
 if [ -n "${PG_URL:-}" ]; then
   PSQL_ARGS="$PG_URL"
-  CONN_DESC="$PG_URL"
+  CONN_DESC="$(printf '%s' "$PG_URL" | sed 's|://[^@]*@|://|')"
 else
   : "${PGHOST:?PGHOST or PG_URL must be set}"
   : "${PGUSER:?PGUSER must be set}"

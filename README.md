@@ -142,7 +142,7 @@ down. Useful as a CI/post-rebase sanity check.
 
 ### Configuration
 
-- **Port:** edit `MIKE_PORT` in `.env`. Changing it requires `docker compose build mike-frontend` because Next.js bakes URLs at build time.
+- **Port:** edit `MIKE_PORT` in `.env`. Changing it requires `./mike build mike-frontend` because Next.js bakes URLs at build time.
 - **Email confirmation:** off by default (`GOTRUE_MAILER_AUTOCONFIRM=true`). To enable, set it to `false` and add `GOTRUE_SMTP_HOST` / `GOTRUE_SMTP_USER` / `GOTRUE_SMTP_PASS` / `GOTRUE_SMTP_PORT` / `GOTRUE_SMTP_ADMIN_EMAIL` to the `gotrue` service env in `docker-compose.yml`.
 - **Reset everything:** `docker compose down -v` deletes all volumes (Postgres data, Garage data, generated Garage credentials, Caddy state).
 

@@ -123,6 +123,8 @@ case "$SUPABASE_MODE" in
       echo "  kept SUPABASE_SECRET_KEY"
     fi
     warn_required EXTERNAL_POSTGRES_URL "MIKE_SUPABASE_MODE=bundled-byo-db"
+    warn_required EXTERNAL_POSTGRES_AUTHENTICATOR_URL "MIKE_SUPABASE_MODE=bundled-byo-db (PostgREST authenticator role)"
+    warn_required EXTERNAL_SUPABASE_GOTRUE_PG_URL "MIKE_SUPABASE_MODE=bundled-byo-db (GoTrue needs search_path=auth)"
     ;;
   external)
     warn_required EXTERNAL_SUPABASE_URL "MIKE_SUPABASE_MODE=external"
